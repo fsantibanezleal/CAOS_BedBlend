@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bedblend"
+version = "0.01.000"
+description = "A bed-blending stockpile engine: repose-angle deposition, Gray-Thornton kinetic size segregation, a per-cell lot ledger with provenance, and the blending metrics (variance reduction, variograms, residence time)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Felipe Santibanez-Leal" }]
+keywords = [
+  "stockpile", "bed blending", "blending bed", "homogenization", "chevron", "windrow",
+  "segregation", "kinetic sieving", "angle of repose", "reclaimer", "mineral processing",
+  "grade control", "variance reduction", "geometallurgy",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Physics",
+  "Operating System :: OS Independent",
+]
+# The core is deliberately dependency-free: it is plain Python floats and lists, so it installs
+# anywhere in seconds and can be reproduced bit for bit by a browser implementation of the same
+# equations. Anything heavy belongs to a consumer, not here.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6", "build>=1.0"]
+
+[project.urls]
+Homepage = "https://github.com/fsantibanezleal/CAOS_BedBlend"
+Issues = "https://github.com/fsantibanezleal/CAOS_BedBlend/issues"
+Changelog = "https://github.com/fsantibanezleal/CAOS_BedBlend/blob/main/CHANGELOG.md"
+
+[tool.setuptools.packages.find]
+include = ["bedblend*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"

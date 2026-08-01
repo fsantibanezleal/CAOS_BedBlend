@@ -1,0 +1,63 @@
+# Publish `bedblend` to PyPI on a tagged release, via PyPI Trusted Publishing (OIDC), NO stored token
+# (ADR-0061). One-time human setup: add a PyPI "pending publisher" for project `bedblend`, owner
+# `fsantibanezleal`, repo `CAOS_BedBlend`, workflow `publish.yml`, environment `pypi`. After that a
+# pushed tag `vX.XX.XXX` (or a published GitHub Release) builds and uploads tokenlessly.
+name: publish
+
+on:
+  release:
+    types: [published]
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+      - name: Smoke-install the wheel in a clean venv and run a real pile (the package contract)
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/python -m pip install dist/*.whl
+          /tmp/smoke/bin/python - <<'PY'
+          import bedblend as bb
+          cfg = bb.RunConfig(pad=bb.PadSpec(nx=24, ny=16, cell_m=3.0), stacking="chevron",
+                             reclaim="fullface", n_passes=12, sr=1.0, cut_tonnes=600.0)
+          r = bb.simulate(cfg, bb.generate_stream(n_dumps=120, seed=7))
+          m = r.metrics
+          assert len(r.cuts) > 0, "the smoke pile produced no cuts"
+          assert 0 < m.vrr < 1, f"implausible variance reduction {m.vrr}"
+          for cut in r.cuts:
+              s = sum(cut.sources.values())
+              assert abs(s - 1) < 1e-9, f"provenance of cut {cut.cut_id} summed to {s}"
+          print(f"smoke OK: {bb.__version__}, {len(r.cuts)} cuts, VRR {m.vrr:.3f}, "
+                f"{m.n_layers_mean:.1f} layers/cut")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # OIDC: PyPI mints a short-lived token, nothing is stored
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI (Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1

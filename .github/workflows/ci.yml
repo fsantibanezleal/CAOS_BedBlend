@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      # The core declares no dependencies, so this also proves the claim: if an import of numpy or
+      # anything else ever creeps in, the install here stays empty and the tests fail on it.
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check bedblend tests
+      - name: Tests
+        run: pytest
+      - name: The core really is dependency-free
+        run: |
+          python - <<'PY'
+          import importlib.metadata as md
+          deps = md.requires("bedblend") or []
+          hard = [d for d in deps if "extra ==" not in d]
+          assert not hard, f"bedblend declared runtime dependencies: {hard}"
+          print("OK: no runtime dependencies")
+          PY
+
+  guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Base-integrity guards
+        run: |
+          fail=0
+          if git ls-files | grep -qE '(^|/)\.env(\..+)?$'; then
+            echo "::error::a real .env is tracked"; fail=1; fi
+          if git ls-files | grep -qiE '(^|/)\.?venv|\.(dll|so|dylib|pt|pth)$'; then
+            echo "::error::a venv or native binary is tracked"; fail=1; fi
+          if git grep -nF 'D:\_Repos' -- . ':!.github' >/dev/null 2>&1; then
+            echo "::error::leaked local machine path in a tracked file"; fail=1; fi
+          # this repo exists because internal packages are forbidden; it must never grow one
+          if git ls-files | grep -qE '(^|/)[a-z_]+lab/'; then
+            echo "::error::a *lab package appeared; see conventions/no-internal-packages.md"; fail=1; fi
+          if [ "$fail" -eq 0 ]; then echo "guards: OK"; fi
+          exit $fail
+      - name: Version coherence, VERSION == pyproject == the top CHANGELOG entry
+        run: |
+          python - <<'PY'
+          import re, pathlib
+          v_file = pathlib.Path("VERSION").read_text().strip()
+          pyproj = re.search(r'^version\s*=\s*"([^"]+)"', pathlib.Path("pyproject.toml").read_text(), re.M).group(1)
+          chlog = re.search(r'^## \[([^\]]+)\]', pathlib.Path("CHANGELOG.md").read_text(), re.M).group(1)
+          assert v_file == pyproj == chlog, f"version drift: VERSION={v_file} pyproject={pyproj} CHANGELOG={chlog}"
+          print(f"OK: {v_file}")
+          PY
