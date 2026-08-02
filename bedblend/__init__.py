@@ -54,7 +54,7 @@ export belong to the application that consumes this engine, not to the engine.
 """
 from __future__ import annotations
 
-__version__ = "0.02.000"
+__version__ = "0.03.000"
 
 from .blending import (
     VRR_FORMULA_LABEL,
@@ -86,6 +86,20 @@ from .dump import (
     place_edge,
     place_paddock,
     run_out_for_bench,
+)
+from .facesegregation import (
+    FaceSegregation,
+    apparent_repose_deg,
+    intensity,
+    segregate_face,
+    segregation_index,
+)
+from .material import (
+    COMPACTION_BAND,
+    DEFAULT_MATERIAL,
+    SWELL_HARD_ROCK,
+    Material,
+    SizeSplit,
 )
 from .reclaim import Cut, ReclaimFace, ReclaimMethod, advance, campaign, cut
 from .relax import (
@@ -143,7 +157,9 @@ sectors_compare = compare
 
 __all__ = [
     "CFL",
+    "COMPACTION_BAND",
     "CONFIDENCE_LEVELS",
+    "DEFAULT_MATERIAL",
     "EMPTY_M",
     "FRESH_HEAP_DEG",
     "FRESH_HEAP_SLOPE",
@@ -154,6 +170,7 @@ __all__ = [
     "MEASURED_WIDTH_M",
     "NZ_DEFAULT",
     "PROFILE_STATS",
+    "SWELL_HARD_ROCK",
     "VRR_FORMULA_LABEL",
     "Area",
     "Bench",
@@ -167,10 +184,12 @@ __all__ = [
     "DozerPass",
     "DumpPlan",
     "DumpProfile",
+    "FaceSegregation",
     "FillType",
     "Fleet",
     "FlowingLayer",
     "LoadRecord",
+    "Material",
     "NoRoute",
     "Parcel",
     "Payload",
@@ -182,12 +201,14 @@ __all__ = [
     "ReposeViolation",
     "Rollup",
     "Route",
+    "SizeSplit",
     "Terrain",
     "TipPosition",
     "Truck",
     "TruckSpec",
     "Xorshift",
     "advance",
+    "apparent_repose_deg",
     "assert_stable",
     "blending_efficiency",
     "build",
@@ -210,6 +231,7 @@ __all__ = [
     "ground",
     "histogram",
     "homogeneity_map",
+    "intensity",
     "level",
     "max_slope_excess",
     "mean_and_sd",
@@ -230,6 +252,8 @@ __all__ = [
     "rollup_by_lift",
     "run_out_for_bench",
     "sectors_compare",
+    "segregate_face",
+    "segregation_index",
     "segregation_number",
     "settle",
     "solve_route",
