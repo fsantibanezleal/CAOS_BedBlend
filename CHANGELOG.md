@@ -13,6 +13,15 @@ no lifts and no access constraint.
 
 ### Fixed
 
+- **The dozer excavating the hillside.** `level` selected material to push by ELEVATION alone, which
+  is right on a flat pad and wrong on any sloping site: on a sidehill the high ground is the hill, so
+  the blade drove a cell 4.43 m below the ground it started from. Only placed material can be pushed
+  now, capped by what is actually there.
+- **Relaxation eroding original ground.** The cascade treated elevation as free-floating and would
+  avalanche bedrock. It now takes the original ground as a floor, so a cell can shed at most the
+  material sitting above it, and the stability check skips cells carrying nothing, because the angle
+  of repose is a property of loose material and a natural hillside is entitled to stand steeper.
+
 - **The spikes.** When a cell topples it gets lower, which destabilises the cells ABOVE it. The
   relaxation re-queued only the cells that received material, so with a highest-first queue an uphill
   neighbour was checked once, found stable, and never revisited after this cell dropped below it. A
@@ -63,6 +72,12 @@ no lifts and no access constraint.
   pile fed by trucks. Those are conveyor-stacker geometries; of the five pre-crusher stockpile types
   only blended-in-blended-out is a chevron. Trucks do not build a chevron bed.
 - `heightfield`, `pile`, `run` and `schema`, replaced by the modules above.
+
+- `topography`, ground that is not flat. Only one of the five published stockpile fill types is a
+  prepared flat pad; the others are sidehill, valley, cross-valley and ridge-crest fill, and the
+  ground decides where equipment can go before a single load is placed. Measured on a 30 m landform
+  at the equipment limit, buildable ground is 100 percent on a flat pad and 72 percent in a valley or
+  along a ridge.
 
 ### Known limits
 

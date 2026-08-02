@@ -123,6 +123,7 @@ from .stream import (
     payloads_from,
 )
 from .terrain import EMPTY_M, Terrain, TruckSpec
+from .topography import FillType, buildable_fraction, ground, relief_stats
 from .truck import (
     CycleState,
     Fleet,
@@ -166,6 +167,7 @@ __all__ = [
     "DozerPass",
     "DumpPlan",
     "DumpProfile",
+    "FillType",
     "Fleet",
     "FlowingLayer",
     "LoadRecord",
@@ -190,6 +192,7 @@ __all__ = [
     "blending_efficiency",
     "build",
     "build_berm",
+    "buildable_fraction",
     "campaign",
     "cascade",
     "character",
@@ -204,6 +207,7 @@ __all__ = [
     "distance_to_crest",
     "experimental_variogram",
     "fit_spherical",
+    "ground",
     "histogram",
     "homogeneity_map",
     "level",
@@ -221,6 +225,7 @@ __all__ = [
     "reachable_mask",
     "rectangular_yard",
     "relax_to",
+    "relief_stats",
     "rollup",
     "rollup_by_lift",
     "run_out_for_bench",

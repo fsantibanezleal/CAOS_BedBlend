@@ -143,6 +143,7 @@ def cascade(
     *,
     active: set[int] | None = None,
     max_moves: int = MAX_MOVES,
+    floor: list[float] | None = None,
 ) -> list[tuple[int, int, float]]:
     """Relax ``z`` in place and return the transfers IN DOWNSLOPE ORDER.
 
@@ -182,6 +183,11 @@ def cascade(
                 over.append((n, d))
         if not over:
             continue
+        # A cell can only shed the material sitting above the original ground.
+        budget = (zc - floor[c]) if floor is not None else float("inf")
+        if budget <= CONVERGE_TOL_M:
+            continue
+
         over.sort(key=lambda p: -p[1])
         total = 0.0
         level = 0.0
@@ -201,6 +207,10 @@ def cascade(
             t = d - level
             if t <= CONVERGE_TOL_M:
                 continue
+            t = min(t, budget)
+            budget -= t
+            if t <= CONVERGE_TOL_M:
+                break
             z[c] -= t
             z[n] += t
             moved = True
@@ -252,7 +262,8 @@ def max_slope_excess(
 
 
 def count_over_repose(
-    z: list[float], nx: int, ny: int, cell_m: float, repose_deg: float
+    z: list[float], nx: int, ny: int, cell_m: float, repose_deg: float,
+    *, floor: list[float] | None = None,
 ) -> tuple[int, float]:
     """``(number of over-steep ordered pairs, worst angle in degrees)``.
 
@@ -265,6 +276,12 @@ def count_over_repose(
     for c in range(nx * ny):
         i, j = c % nx, c // nx
         zc = z[c]
+        # THE ANGLE OF REPOSE IS A PROPERTY OF LOOSE MATERIAL, NOT OF BEDROCK. A natural hillside is
+        # entitled to stand steeper than any ore will, and flagging it would make the invariant
+        # meaningless on four of the five published fill types. A cell is only capable of violating
+        # repose if it is carrying material that could move.
+        if floor is not None and zc - floor[c] <= VERIFY_TOL_M:
+            continue
         for k, (di, dj) in enumerate(_OFFSETS):
             ni, nj = i + di, j + dj
             if not (0 <= ni < nx and 0 <= nj < ny):
@@ -285,6 +302,7 @@ def relax_to(
     *,
     active: set[int] | None = None,
     verify: bool = True,
+    respect_ground: bool = True,
 ) -> list[tuple[int, int, float]]:
     """Relax the terrain surface to ``repose_deg`` and, by default, prove that it worked.
 
@@ -293,7 +311,8 @@ def relax_to(
     shipped. Turn it off only in an inner loop that verifies once at the end.
     """
     moves = cascade(
-        terrain.z, terrain.nx, terrain.ny, terrain.cell_m, repose_deg, active=active
+        terrain.z, terrain.nx, terrain.ny, terrain.cell_m, repose_deg, active=active,
+        floor=terrain.z0 if respect_ground else None,
     )
     if verify:
         assert_stable(terrain, repose_deg)
@@ -316,7 +335,8 @@ def settle(
     acting along both is not the same as segregation acting along one.
     """
     first = cascade(
-        terrain.z, terrain.nx, terrain.ny, terrain.cell_m, fresh_deg, active=active
+        terrain.z, terrain.nx, terrain.ny, terrain.cell_m, fresh_deg, active=active,
+        floor=terrain.z0,
     )
     # The settling stage cannot be seeded from the deposit alone: the first stage has already moved
     # material outward, so cells that were never written can now be over-steep. But it must not fall
@@ -331,7 +351,10 @@ def settle(
         for a, b, _ in first:
             seed.add(a)
             seed.add(b)
-    second = cascade(terrain.z, terrain.nx, terrain.ny, terrain.cell_m, repose_deg, active=seed)
+    second = cascade(
+        terrain.z, terrain.nx, terrain.ny, terrain.cell_m, repose_deg, active=seed,
+        floor=terrain.z0,
+    )
     assert_stable(terrain, repose_deg)
     return first + second
 
@@ -343,7 +366,7 @@ def assert_stable(terrain: Terrain, repose_deg: float) -> None:
     tell a genuine solver failure from a caller that passed the wrong angle.
     """
     n_over, worst = count_over_repose(
-        terrain.z, terrain.nx, terrain.ny, terrain.cell_m, repose_deg
+        terrain.z, terrain.nx, terrain.ny, terrain.cell_m, repose_deg, floor=terrain.z0
     )
     if n_over:
         raise ReposeViolation(

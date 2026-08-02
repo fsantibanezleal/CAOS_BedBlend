@@ -31,17 +31,40 @@ jobs:
           /tmp/smoke/bin/python -m pip install dist/*.whl
           /tmp/smoke/bin/python - <<'PY'
           import bedblend as bb
-          cfg = bb.RunConfig(pad=bb.PadSpec(nx=24, ny=16, cell_m=3.0), stacking="chevron",
-                             reclaim="fullface", n_passes=12, sr=1.0, cut_tonnes=600.0)
-          r = bb.simulate(cfg, bb.generate_stream(n_dumps=120, seed=7))
-          m = r.metrics
-          assert len(r.cuts) > 0, "the smoke pile produced no cuts"
-          assert 0 < m.vrr < 1, f"implausible variance reduction {m.vrr}"
-          for cut in r.cuts:
-              s = sum(cut.sources.values())
-              assert abs(s - 1) < 1e-9, f"provenance of cut {cut.cut_id} summed to {s}"
-          print(f"smoke OK: {bb.__version__}, {len(r.cuts)} cuts, VRR {m.vrr:.3f}, "
-                f"{m.n_layers_mean:.1f} layers/cut")
+
+          # Build a real pile with trucks, a dozer and a plan, then reclaim it. This is the package
+          # contract: an installed wheel must be able to run the whole system from a clean venv.
+          REPOSE = 37.0
+          terrain = bb.Terrain.flat(48, 48, 2.5)
+          plan = bb.rectangular_yard(n_areas=1, area_width_m=70.0, area_length_m=70.0,
+                                     bench_height_m=8.0, n_benches=1)
+          plan.row_spacing_m, plan.tip_spacing_m = 10.0, 8.0
+          plan.areas[0].access_xy = (70.0, 0.0)
+          fleet = bb.Fleet.of(3, bb.TruckSpec(), (110.0, 10.0), repose_deg=REPOSE)
+          loads = bb.payloads_from(bb.dig_sequence(n_loads=90, seed=7), seed=7)
+
+          res = bb.build(terrain, plan, fleet, loads, repose_deg=REPOSE)
+          assert res.placed, "the smoke build placed nothing"
+
+          # The invariants that made this version necessary.
+          bb.assert_stable(res.terrain, REPOSE)
+          res.model.assert_consistent(res.terrain)
+          n_over, worst = bb.count_over_repose(res.terrain.z, res.terrain.nx, res.terrain.ny,
+                                               res.terrain.cell_m, REPOSE)
+          assert n_over == 0, f"{n_over} cell pairs over repose, worst {worst:.1f} deg"
+
+          cuts = bb.campaign(res.terrain, res.model,
+                             bb.ReclaimFace(method=bb.ReclaimMethod.FULL_HEIGHT, depth_m=10.0,
+                                            width_m=200.0),
+                             cut_tonnes=1500.0, n_cuts=10, repose_deg=REPOSE)
+          assert cuts, "the smoke pile produced no cuts"
+          for k, c in enumerate(cuts):
+              s = sum(c.provenance.values())
+              assert abs(s - 1) < 1e-9, f"provenance of cut {k} summed to {s}"
+
+          print(f"smoke OK: {bb.__version__}, {len(res.placed)} loads placed, "
+                f"{len(cuts)} cuts, 0 pairs over repose, "
+                f"profiles {res.profile_counts()}")
           PY
       - uses: actions/upload-artifact@v4
         with:
