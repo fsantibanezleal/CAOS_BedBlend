@@ -4,6 +4,44 @@ All notable changes to `bedblend` are recorded here. The format follows Keep a C
 top, and the versions follow `X.XX.XXX` (the manifest carries the semver form with the padding
 dropped).
 
+## [0.03.000] - 2026-08-02
+
+The physics the engine was missing. 0.02.000 rebuilt the geometry correctly but still carried three
+quantities as single constants that are not constants, and it shipped a segregation solver that
+nothing ever called.
+
+### Added
+
+- `material`. Density is not one number: rock is dense in the ground, SWELLS when blasted and loaded,
+  and COMPACTS again under traffic. Hard-rock swell is 30 to 45 percent and achievable compaction 5 to
+  15 percent, approached over 20 to 30 equipment passes rather than linearly. The angle of repose is
+  not a constant of the ore either: it rises with a little moisture through capillary cohesion and
+  collapses past saturation, so it is now a function rather than a setting. And a load carries a size
+  split, because a model with one size per load cannot segregate at all.
+- `facesegregation`. The coupling that was missing. Gray and Thornton's solver was in the package and
+  was never applied, because in the old product nothing ever formed a face for an avalanche to run
+  down. Coarse now runs to the toe and fines stay near the crest, more strongly from a taller and
+  steeper face, with part of the coarse rolling BEYOND the toe. Three published drivers, all of them
+  quantities the engine already had: drop height, face angle, and the material's own size spread. A
+  single-sized material or a flat tip produces no sorting at all, which is the degenerate case that
+  proves the model is not just painting a gradient on everything.
+- Routing. `build` takes a `route` hook mapping a load to the area its declared class belongs in, so
+  several areas are under construction at once and a class ends up where it was sent. Sectors only
+  exist because of routing; a yard without it has one sector and nothing to compare.
+
+### Fixed
+
+- **The berm walled the working area off from itself.** A continuous berm along every crest cell is
+  not a berm, it is a wall, and it made refusals go UP the more the dozer ran: 62 percent at a pass
+  per 10 loads against 33 percent at a pass per 40. Real tip heads have breaks in them. With gaps,
+  refusals fall to 19.2 percent at the default cadence and 30.8 percent at the tight one.
+
+### Changed
+
+- The block ledger records a coarse fraction per parcel, so a cell near the toe of a face reads
+  coarser than one near its crest. Measured across a 240-load build, the coarse fraction spans 0.000
+  to 0.395 against a uniform input of 0.350.
+
 ## [0.02.000] - 2026-08-02
 
 The engine is rebuilt around what a truck-built stockpile actually is. Version 0.01.000 modelled a

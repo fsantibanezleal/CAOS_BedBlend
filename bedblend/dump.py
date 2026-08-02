@@ -41,7 +41,7 @@ mechanism this model does not have. The frequencies are real; the selection is a
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 from .terrain import Terrain, TruckSpec
@@ -185,6 +185,10 @@ class Placement:
     max_thickness_m: float
     heading_rad: float
     distance_to_crest_m: float
+    # Down-face position of each cell, 0 at the crest and 1 at the toe, parallel to ``cells``. This is
+    # the coordinate size segregation is distributed along; without it the solver has no axis to sort
+    # on and the coupling cannot exist. Empty for a paddock heap, which has no face.
+    s_frac: list[float] = field(default_factory=list)
 
 
 def _apply(terrain: Terrain, weights: dict[int, float], volume_m3: float) -> tuple[list[int], list[float]]:
@@ -342,6 +346,7 @@ def place_edge(
 
     reach = run_out_m + half_w + terrain.cell_m
     weights: dict[int, float] = {}
+    s_of: dict[int, float] = {}
     for c in _cells_within(terrain, x_m, y_m, reach):
         cx, cy = terrain.xy(c)
         dx, dy = cx - x_m, cy - y_m
@@ -363,10 +368,12 @@ def place_edge(
         w = _mass_shape(profile, s) * lateral
         if w > 0.0:
             weights[c] = w
+            s_of[c] = s
 
     cells, added = _apply(terrain, weights, volume_m3)
     length, width, thick = _measure(terrain, cells, added, (nx_, ny_))
     return Placement(
+        s_frac=[s_of.get(c, 0.0) for c in cells],
         profile=profile,
         cells=cells,
         added_m=added,

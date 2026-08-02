@@ -33,6 +33,7 @@ not determine it.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from .blocks import BlockModel, transfer_distances
@@ -46,6 +47,8 @@ from .dump import (
     place_paddock,
     run_out_for_bench,
 )
+from .facesegregation import segregate_face
+from .material import DEFAULT_MATERIAL, Material, SizeSplit
 from .relax import relax_to, settle
 from .terrain import Terrain
 from .truck import Fleet, NoRoute, Payload, Route, reachable_mask
@@ -105,6 +108,11 @@ class LoadRecord:
     max_thickness_m: float = 0.0
     approach: Route | None = None
     departure: Route | None = None
+    # How strongly this load sorted itself on the way down the face, the drop it fell, and the coarse
+    # fraction that rolled beyond the toe. Zero for a paddock heap, which has no face to sort along.
+    segregation_index: float = 0.0
+    overrun_fraction: float = 0.0
+    drop_m: float = 0.0
     refused_reason: str = ""
 
 
@@ -148,6 +156,8 @@ def build(
     seed: int = 20260801,
     crest_drop_m: float = 1.0,
     max_spot_offset_m: float = 25.0,
+    material: Material = DEFAULT_MATERIAL,
+    route: Callable[[Payload], str] | None = None,
     verify_every: int = 0,
 ) -> BuildResult:
     """Run the whole plan, load by load, and return what happened.
@@ -158,6 +168,15 @@ def build(
     the pit is dug is a property of the operation, not of the pile.
 
     ``face_angle_deg`` defaults to the repose angle, which is what a tipped face stands at.
+
+    ``material`` supplies the properties that are NOT constants of the engine: the density through
+    the handling chain, the moisture that moves the angle of repose, and the size split that
+    segregation acts on. A model with one size per load cannot segregate at all.
+
+    ``route`` maps a load to the NAME of the area it belongs in, from its ore-control estimate. With
+    it, several areas are under construction at once and a class ends up where it was sent. Without
+    it, areas are worked one at a time. Routing is the mechanism by which sectors come to exist at
+    all, so a yard with no router has one sector and nothing to compare.
 
     ``verify_every`` checks the ledger against the terrain every N loads. Off by default because it is
     O(cells) per check, on in the tests, and worth turning on whenever a build looks wrong.
@@ -182,9 +201,20 @@ def build(
     truck_spec = fleet.trucks[0].spec
     load_volume = truck_spec.load_volume_m3
     seq = 0
-    since_dozer = 0
 
+    # EVERY AREA GETS A QUEUE OF PLANNED WORK, and the queues are consumed in one of two orders.
+    #
+    # Without a router the areas are worked one at a time, which is the single-stock case.
+    # With one, each load is sent to the area its declared class routes it to and several areas are
+    # under construction simultaneously. That is what an operation actually does: "the low SMR ore was
+    # sent to one stockpile and the high SMR ore was sent to another stockpile. One high SMR stockpile
+    # and one low SMR stockpile were built at a time" (Neufeld, Lyall and Deutsch, CCG Report 8 paper
+    # 306, 2006). The routing decision is made from the ESTIMATE and before placement, so a
+    # misclassified load lands in the wrong pile and stays there, which is a real and reportable
+    # outcome rather than something to correct after the fact.
+    queues: dict[str, list[tuple[TipPosition, float, int]]] = {}
     for area in plan.areas:
+        q: list[tuple[TipPosition, float, int]] = []
         prev_top = 0.0
         for bench in sorted(area.benches, key=lambda b: b.index):
             # A bench's run-out depends on ITS OWN height, not on how high its top sits above the
@@ -192,44 +222,79 @@ def build(
             bench_height = max(bench.top_m - prev_top, 1e-6)
             prev_top = bench.top_m
             run_out = run_out_for_bench(bench_height, face_deg)
-            tips = plan.bench_program(
+            for tip in plan.bench_program(
                 area, bench, load_volume_m3=load_volume, run_out_m=run_out
-            )
+            ):
+                q.append((tip, run_out, bench.index))
+        queues[area.name] = q
 
-            for tip in tips:
-                if seq >= len(payloads):
-                    break
-                payload = payloads[seq]
-                truck = fleet.trucks[seq % len(fleet.trucks)]
+    cursors: dict[str, int] = {name: 0 for name in queues}
+    dozer_counts: dict[str, int] = {name: 0 for name in queues}
+    order = [a.name for a in plan.areas]
 
-                crest = terrain.crest_cells(min_drop_m=crest_drop_m)
-                # Reachability for the WHOLE pad, once per load. Asking it per candidate spot with a
-                # route solve each time took a build from 40 s past 500 s.
-                reachable = reachable_mask(terrain, fleet.shovel_xy, fleet.max_grade)
-                rec = _run_one_load(
-                    terrain, model, fleet, truck, tip, payload, crest, reachable,
-                    rng=rng, run_out_m=run_out, repose_deg=repose_deg,
-                    bench_index=bench.index, seq=seq, max_offset_m=max_spot_offset_m,
+    for payload in payloads:
+        if route is not None:
+            name = route(payload)
+            if name not in queues:
+                raise KeyError(
+                    f"the router sent a load to area {name!r}, which is not in the plan; "
+                    f"the plan has {order}"
                 )
-                result.loads.append(rec)
-                seq += 1
+        else:
+            # Sequential: finish an area's whole programme before starting the next.
+            name = next((n for n in order if cursors[n] < len(queues[n])), order[-1])
 
-                if not rec.placed:
-                    continue
+        if cursors[name] >= len(queues[name]):
+            # This area's programme is complete. A routed load with nowhere left to go is recorded as
+            # refused rather than silently redirected, because redirecting it would quietly break the
+            # one guarantee routing exists to provide: that a class ends up where it was sent.
+            result.loads.append(
+                LoadRecord(
+                    seq=seq, area=name, bench=-1, phase=Phase.PADDOCK, truck_id=-1,
+                    x_m=0.0, y_m=0.0, grade=payload.grade, source_block=payload.source_block,
+                    placed=False,
+                    refused_reason=f"area {name!r} is built out; its planned programme is complete",
+                )
+            )
+            seq += 1
+            continue
 
-                since_dozer += 1
-                if since_dozer >= plan.loads_per_dozer_pass:
-                    since_dozer = 0
-                    result.dozer_passes.extend(
-                        _doze(terrain, model, area, crest_drop_m, repose_deg)
-                    )
+        tip, run_out, bench_index = queues[name][cursors[name]]
+        cursors[name] += 1
+        area = plan.area(name)
+        truck = fleet.trucks[seq % len(fleet.trucks)]
 
-                if verify_every and seq % verify_every == 0:
-                    model.assert_consistent(terrain)
+        crest = terrain.crest_cells(min_drop_m=crest_drop_m)
+        # Reachability for the WHOLE pad, once per load. Asking it per candidate spot with a route
+        # solve each time took a build from 40 s past 500 s.
+        reachable = reachable_mask(terrain, fleet.shovel_xy, fleet.max_grade)
+        rec = _run_one_load(
+            terrain, model, fleet, truck, tip, payload, crest, reachable,
+            rng=rng, run_out_m=run_out, repose_deg=repose_deg,
+            bench_index=bench_index, seq=seq, max_offset_m=max_spot_offset_m,
+            material=material, face_deg=face_deg,
+        )
+        result.loads.append(rec)
+        seq += 1
 
-            # The bench is finished, so level what is left and form the floor the next bench starts
-            # from. Without this the next paddock campaign would be laid on an unfinished surface.
+        if not rec.placed:
+            continue
+
+        # The dozer cadence is PER AREA. With several areas in progress a single global counter would
+        # doze whichever area happened to receive the hundredth load, which is not how a machine
+        # assigned to a dump area behaves.
+        dozer_counts[name] += 1
+        if dozer_counts[name] >= plan.loads_per_dozer_pass:
+            dozer_counts[name] = 0
             result.dozer_passes.extend(_doze(terrain, model, area, crest_drop_m, repose_deg))
+
+        if verify_every and seq % verify_every == 0:
+            model.assert_consistent(terrain)
+
+    # Every area gets a closing pass, so the surface a reader sees is a finished floor rather than
+    # whatever the last load happened to leave.
+    for area in plan.areas:
+        result.dozer_passes.extend(_doze(terrain, model, area, crest_drop_m, repose_deg))
 
     model.assert_consistent(terrain)
     return result
@@ -251,6 +316,8 @@ def _run_one_load(
     repose_deg: float,
     bench_index: int,
     seq: int,
+    material: Material = DEFAULT_MATERIAL,
+    face_deg: float = 37.0,
 ) -> LoadRecord:
     """Dispatch, spot, place, settle, depart. One complete cycle."""
     base = LoadRecord(
@@ -305,10 +372,31 @@ def _run_one_load(
         base.refused_reason = "the load had nowhere to land on the pad"
         return base
 
+    # SIZE SEGREGATION, applied where it actually happens: down a face, not on a flat heap.
+    # A cascading load sorts itself, coarse to the toe and fines toward the crest, more strongly from
+    # a higher and steeper face. A paddock heap keeps the material's own split, because a load tipped
+    # on flat ground has no face to sort along.
+    split = SizeSplit.of(material.coarse_fraction)
+    if at_face and pl.s_frac:
+        drop = terrain.z[terrain.cell_at(dx, dy) or 0] - min(
+            (terrain.z[c] for c in pl.cells), default=0.0
+        )
+        seg = segregate_face(drop_m=max(drop, 0.0), face_angle_deg=face_deg, mat=material)
+        nb = seg.n_bins
+        coarse = [
+            seg.coarse_fraction_at(split, min(int(sv * nb), nb - 1)) for sv in pl.s_frac
+        ]
+        base.segregation_index = seg.intensity
+        base.overrun_fraction = seg.overrun_fraction
+        base.drop_m = max(drop, 0.0)
+    else:
+        coarse = [split.coarse] * len(pl.cells)
+
     model.record(
         terrain, pl.cells, pl.added_m,
         grade=payload.grade, source_block=payload.source_block, event_id=seq,
         lift=bench_index, area=tip.area, grade_uncertainty=payload.grade_uncertainty,
+        coarse_fraction=coarse,
     )
 
     # Emplaced steep, then settled. Both stages move material, so both carry the ledger.
