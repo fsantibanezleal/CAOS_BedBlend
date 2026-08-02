@@ -164,6 +164,50 @@ def passable_mask(terrain: Terrain, max_grade: float) -> list[bool]:
     return [terrain.gradient(c) <= max_grade for c in range(terrain.n_cells)]
 
 
+def reachable_mask(
+    terrain: Terrain,
+    start: tuple[float, float],
+    max_grade: float,
+    *,
+    passable: list[bool] | None = None,
+) -> list[bool]:
+    """Every cell a truck can get to from ``start``, by flood fill over drivable ground.
+
+    WHY A FLOOD FILL RATHER THAN REPEATED ROUTING. Choosing where a truck can actually spot means
+    asking "is this reachable" for many candidate positions. Answering that with one A* solve per
+    candidate is quadratic and was measured taking a build from 40 seconds to over 500. One flood fill
+    answers it for every cell on the pad at once, after which a single A* solve produces the path.
+
+    Cells adjacent to the reachable set are included even when they are themselves too steep to stand
+    on, because a truck spots AT the edge of a face: the crest cell it tips over is by definition
+    steep on one side, and excluding it would make edge dumping impossible.
+    """
+    ok = passable if passable is not None else passable_mask(terrain, max_grade)
+    s = terrain.cell_at(*start)
+    out = [False] * terrain.n_cells
+    if s is None or not ok[s]:
+        return out
+
+    out[s] = True
+    stack = [s]
+    while stack:
+        c = stack.pop()
+        for n in terrain.neighbours(c):
+            if out[n]:
+                continue
+            if ok[n]:
+                out[n] = True
+                stack.append(n)
+    # One ring of edge cells: standing at the lip of a face is exactly what an edge dump requires.
+    fringe = [
+        n for c in range(terrain.n_cells) if out[c]
+        for n in terrain.neighbours(c) if not out[n]
+    ]
+    for n in fringe:
+        out[n] = True
+    return out
+
+
 def solve_route(
     terrain: Terrain,
     start: tuple[float, float],

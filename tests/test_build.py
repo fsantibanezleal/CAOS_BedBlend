@@ -40,7 +40,24 @@ def _stream(n: int, *, block_size: int = 20) -> list[Payload]:
     return out
 
 
-def _run(n_loads: int = 240, n_benches: int = 2):
+# A full build takes tens of seconds, and every test in this file wants the same one. Running it per
+# test turned the suite from under a minute into over ten. The build is deterministic, so one cached
+# run is the same object every test would have produced for itself. Tests that MUTATE the result
+# (reclaim drains the pile) ask for a fresh one explicitly.
+_CACHE: dict[tuple[int, int], object] = {}
+
+
+def _run(n_loads: int = 240, n_benches: int = 2, *, fresh: bool = False):
+    key = (n_loads, n_benches)
+    if not fresh and key in _CACHE:
+        return _CACHE[key]
+    out = _build_once(n_loads, n_benches)
+    if not fresh:
+        _CACHE[key] = out
+    return out
+
+
+def _build_once(n_loads: int, n_benches: int):
     t = Terrain.flat(64, 64, CELL)
     plan = rectangular_yard(
         n_areas=1, area_width_m=90.0, area_length_m=90.0,
@@ -49,6 +66,8 @@ def _run(n_loads: int = 240, n_benches: int = 2):
     plan.row_spacing_m = 10.0
     plan.tip_spacing_m = 8.0
     plan.loads_per_dozer_pass = 40
+    # Access from the pit side, so the crest advances back toward the way out.
+    plan.areas[0].access_xy = (90.0, 90.0)
     # The shovel is in the pit, OUTSIDE the stockpile footprint. Inside it, the first load buries
     # the loading point and every later load is correctly refused.
     fleet = Fleet.of(4, TruckSpec(), (140.0, 140.0), repose_deg=REPOSE)
@@ -81,8 +100,8 @@ def test_mass_is_conserved_through_the_whole_build():
 
 
 def test_the_build_is_deterministic():
-    a, _p = _run()
-    b, _p2 = _run()
+    a, _p = _run(fresh=True)
+    b, _p2 = _run(fresh=True)
     assert [r.placed for r in a.loads] == [r.placed for r in b.loads]
     assert [r.profile for r in a.loads] == [r.profile for r in b.loads]
     assert a.terrain.volume_m3() == pytest.approx(b.terrain.volume_m3(), rel=1e-12)
@@ -141,9 +160,14 @@ def test_refusals_are_recorded_rather_than_hidden():
     for r in res.refused:
         assert r.refused_reason, "a load was refused with no reason recorded"
     assert all(
-        "no drivable route" in r.refused_reason or "nowhere to land" in r.refused_reason
+        "no drivable" in r.refused_reason or "nowhere to land" in r.refused_reason
         for r in res.refused
-    )
+    ), "a load was refused for a reason other than access or the pad edge"
+
+    # The plan is followed exactly where it can be, and the deviation is recorded where it cannot.
+    exact = [r for r in res.placed if r.spot_offset_m < 1e-9]
+    assert len(exact) > len(res.placed) // 2, "most loads should land exactly where planned"
+    assert max(r.spot_offset_m for r in res.placed) <= 25.0 + 1e-6
 
 
 # -- the characterization layer over a real build ------------------------------------------------
@@ -168,7 +192,7 @@ def test_sector_rollup_and_the_published_comparison_hold_on_a_real_build():
 
 def test_reclaim_blends_the_input_stream():
     """The whole point of a stockpile, measured: the feed out varies less than the stream in."""
-    res, _plan = _run()
+    res, _plan = _run(fresh=True)
     face = ReclaimFace(
         method=ReclaimMethod.FULL_HEIGHT, position_m=0.0, direction=(1.0, 0.0),
         depth_m=10.0, width_m=200.0, max_face_m=15.0,

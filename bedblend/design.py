@@ -106,6 +106,15 @@ class Area:
     # What this area is for, in the operation's own vocabulary: "high SMR", "low grade", "oxide".
     # Free text on purpose. The engine never branches on it; it is the label a reader reads.
     material_class: str = ""
+    # WHERE EQUIPMENT ENTERS. Dump design reserves access: a footprint is built up by lifts, with
+    # "access to successive dump lifts achieved by establishing ramps of a suitable width, super
+    # elevation and gradient" (Cogent Engineering 4(1), 1387955). Without a reserved corridor the pile
+    # grows over its own access and the plan starts asking for tips no truck can reach. Measured
+    # before this existed: a third of all planned tips refused, 79 of 80 for having no drivable route.
+    # Defaults to the area's own lower-left corner, which is where a yard laid out from the origin is
+    # normally entered.
+    access_xy: tuple[float, float] | None = None
+    ramp_width_m: float = 25.0
 
     def __post_init__(self) -> None:
         if self.x1_m <= self.x0_m or self.y1_m <= self.y0_m:
@@ -129,6 +138,33 @@ class Area:
 
     def contains(self, x_m: float, y_m: float) -> bool:
         return self.x0_m <= x_m <= self.x1_m and self.y0_m <= y_m <= self.y1_m
+
+    @property
+    def access(self) -> tuple[float, float]:
+        return self.access_xy if self.access_xy is not None else (self.x0_m, self.y0_m)
+
+    def on_ramp(self, x_m: float, y_m: float) -> bool:
+        """Is this point inside the reserved access corridor.
+
+        The corridor is the strip of the area within half a ramp width of the straight line from the
+        access point to the area's centre. Nothing is tipped on it, so there is always a way in.
+        """
+        ax, ay = self.access
+        cx, cy = self.centre
+        vx, vy = cx - ax, cy - ay
+        span = math.hypot(vx, vy)
+        if span < 1e-9:
+            return False
+        vx, vy = vx / span, vy / span
+        dx, dy = x_m - ax, y_m - ay
+        along = dx * vx + dy * vy
+        if along < 0.0 or along > span:
+            return False
+        return abs(-dy * vx + dx * vy) <= self.ramp_width_m / 2.0
+
+    def distance_from_access(self, x_m: float, y_m: float) -> float:
+        ax, ay = self.access
+        return math.hypot(x_m - ax, y_m - ay)
 
 
 @dataclass
@@ -179,27 +215,37 @@ class DumpPlan:
         from consecutive trucks and therefore from nearby material in the pit, so the serpentine order
         is what puts correlated grades next to each other rather than scattering them.
         """
-        tips: list[TipPosition] = []
-        seq = start_seq
+        rows: list[list[tuple[float, float]]] = []
         # Inset by half a spacing so the lattice sits inside the polygon rather than on its boundary.
         y = area.y0_m + self.row_spacing_m / 2.0
-        row = 0
         while y <= area.y1_m:
             xs: list[float] = []
             x = area.x0_m + self.tip_spacing_m / 2.0
             while x <= area.x1_m:
-                xs.append(x)
+                if not area.on_ramp(x, y):     # keep the access corridor clear
+                    xs.append(x)
                 x += self.tip_spacing_m
-            if row % 2 == 1:
-                xs.reverse()
+            if xs:
+                rows.append([(xx, y) for xx in xs])
+            y += self.row_spacing_m
+
+        # WORK AWAY FROM THE ACCESS. Rows furthest from the entry point are filled first, so the truck
+        # never has to cross material it has already placed. Filling the near rows first walls the
+        # machine out of its own dump area, which is what the measured refusals were.
+        rows.sort(key=lambda r: -area.distance_from_access(*r[len(r) // 2]))
+
+        tips: list[TipPosition] = []
+        seq = start_seq
+        for k, row_pts in enumerate(rows):
+            # Serpentine: the truck that finishes a row is at its far end and the next row starts
+            # from there.
+            pts = list(reversed(row_pts)) if k % 2 == 1 else row_pts
             # Heading is along the row, in the direction of travel: the tray discharges behind the
             # truck, so the load lands opposite the way it drove in.
-            heading = math.pi if row % 2 == 1 else 0.0
-            for xx in xs:
-                tips.append(TipPosition(xx, y, heading, Phase.PADDOCK, area.name, bench.index, seq))
+            heading = math.pi if k % 2 == 1 else 0.0
+            for xx, yy in pts:
+                tips.append(TipPosition(xx, yy, heading, Phase.PADDOCK, area.name, bench.index, seq))
                 seq += 1
-            y += self.row_spacing_m
-            row += 1
         return tips
 
     def edge_tips(
@@ -223,8 +269,18 @@ class DumpPlan:
         right answer while the face is a growing disc, but the execution step resolves it against the
         live crest normal because that is what the measurement actually specifies.
         """
-        sx = area.x0_m + self.seed_frac_x * area.width_m
-        sy = area.y0_m + self.seed_frac_y * area.length_m
+        # SEED OPPOSITE THE ACCESS. The upper layer starts as a cluster and then sweeps outward, so
+        # seeding it beside the entry point buries the entry point first and walls the machine out of
+        # the area it is meant to be filling. Starting at the far corner makes the crest advance back
+        # toward the way out, which is also how a tip head is actually worked.
+        corners = [
+            (area.x0_m, area.y0_m), (area.x1_m, area.y0_m),
+            (area.x0_m, area.y1_m), (area.x1_m, area.y1_m),
+        ]
+        fx, fy = max(corners, key=lambda p: area.distance_from_access(*p))
+        cx0, cy0 = area.centre
+        sx = fx + self.seed_frac_x * (cx0 - fx)
+        sy = fy + self.seed_frac_y * (cy0 - fy)
         step = max(run_out_m * self.sweep_advance_frac, self.tip_spacing_m)
 
         tips: list[TipPosition] = []
@@ -257,7 +313,7 @@ class DumpPlan:
                     break
                 a = 2.0 * math.pi * k / n_on_ring
                 x, y = sx + r * math.cos(a), sy + r * math.sin(a)
-                if not area.contains(x, y):
+                if not area.contains(x, y) or area.on_ramp(x, y):
                     continue
                 tips.append(TipPosition(x, y, a, Phase.EDGE, area.name, bench.index, seq))
                 seq += 1

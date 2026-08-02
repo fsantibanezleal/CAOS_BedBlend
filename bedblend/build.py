@@ -48,7 +48,7 @@ from .dump import (
 )
 from .relax import relax_to, settle
 from .terrain import Terrain
-from .truck import Fleet, NoRoute, Payload, Route
+from .truck import Fleet, NoRoute, Payload, Route, reachable_mask
 
 
 class _Rand:
@@ -91,6 +91,12 @@ class LoadRecord:
     grade: float
     source_block: int
     placed: bool
+    # WHERE THE PLAN ASKED FOR THE LOAD, against where the truck could actually stand. The gap between
+    # the two is a real quantity: it is what a fleet-management export shows when planned and actual
+    # dump locations are compared, and it measures how well the plan matched the site.
+    planned_x_m: float = 0.0
+    planned_y_m: float = 0.0
+    spot_offset_m: float = 0.0
     profile: DumpProfile | None = None
     distance_to_crest_m: float = 0.0
     heading_rad: float = 0.0
@@ -141,6 +147,7 @@ def build(
     face_angle_deg: float | None = None,
     seed: int = 20260801,
     crest_drop_m: float = 1.0,
+    max_spot_offset_m: float = 25.0,
     verify_every: int = 0,
 ) -> BuildResult:
     """Run the whole plan, load by load, and return what happened.
@@ -196,10 +203,13 @@ def build(
                 truck = fleet.trucks[seq % len(fleet.trucks)]
 
                 crest = terrain.crest_cells(min_drop_m=crest_drop_m)
+                # Reachability for the WHOLE pad, once per load. Asking it per candidate spot with a
+                # route solve each time took a build from 40 s past 500 s.
+                reachable = reachable_mask(terrain, fleet.shovel_xy, fleet.max_grade)
                 rec = _run_one_load(
-                    terrain, model, fleet, truck, tip, payload, crest,
+                    terrain, model, fleet, truck, tip, payload, crest, reachable,
                     rng=rng, run_out_m=run_out, repose_deg=repose_deg,
-                    bench_index=bench.index, seq=seq,
+                    bench_index=bench.index, seq=seq, max_offset_m=max_spot_offset_m,
                 )
                 result.loads.append(rec)
                 seq += 1
@@ -233,8 +243,10 @@ def _run_one_load(
     tip: TipPosition,
     payload: Payload,
     crest: list[int],
+    reachable: list[bool],
     *,
     rng: _Rand,
+    max_offset_m: float,
     run_out_m: float,
     repose_deg: float,
     bench_index: int,
@@ -244,15 +256,35 @@ def _run_one_load(
     base = LoadRecord(
         seq=seq, area=tip.area, bench=bench_index, phase=tip.phase, truck_id=truck.truck_id,
         x_m=tip.x_m, y_m=tip.y_m, grade=payload.grade, source_block=payload.source_block,
-        placed=False,
+        placed=False, planned_x_m=tip.x_m, planned_y_m=tip.y_m,
     )
 
+    # THE PLAN PROPOSES, THE SITE DISPOSES. A planned tip often cannot be occupied, and the reason is
+    # physical rather than incidental: freshly placed material stands at its angle of repose, 37
+    # degrees here, while a haul truck works to roughly 27. Measured directly, every single cell of a
+    # settled heap is undrivable. A truck therefore never stands on fresh material; it stands on
+    # levelled floor or original ground and tips ONTO the heap.
+    #
+    # So an unreachable tip is not an immediate refusal. The operator spots at the nearest workable
+    # point instead, which is exactly what happens on site, where "dozer operators determine how haul
+    # trucks access the dump or stockpile and in what order". The deviation is recorded, because the
+    # gap between planned and actual dump locations is real, is what a fleet-management export shows,
+    # and is a genuine measure of how good the plan was.
+    actual = _nearest_reachable(terrain, tip, reachable, max_offset_m)
+    if actual is None:
+        base.refused_reason = (
+            f"no drivable ground within {max_offset_m:.0f} m of the planned tip: the pile has grown "
+            f"over its own access here"
+        )
+        return base
     try:
-        heading, d_crest = fleet.dispatch(terrain, truck, tip, payload, crest=crest)
+        heading, d_crest = fleet.dispatch(terrain, truck, actual, payload, crest=crest)
     except NoRoute as e:
-        # THE PILE REFUSED THE PLAN. Recorded, not swallowed.
         base.refused_reason = str(e)
         return base
+
+    base.x_m, base.y_m = actual.x_m, actual.y_m
+    base.spot_offset_m = math.hypot(actual.x_m - tip.x_m, actual.y_m - tip.y_m)
 
     dx, dy = truck.discharge_xy()
 
@@ -295,6 +327,43 @@ def _run_one_load(
     base.approach = truck.approach
     base.departure = truck.departure
     return base
+
+
+def _nearest_reachable(
+    terrain: Terrain, tip: TipPosition, reachable: list[bool], max_offset_m: float
+) -> TipPosition | None:
+    """The closest spot to the planned tip that the truck can actually get to, or None.
+
+    The plan is always tried first, so a feasible plan is followed exactly. Otherwise the search
+    walks outward over cells the flood fill already marked reachable, which costs a bounded scan
+    rather than one route solve per candidate.
+    """
+    c0 = terrain.cell_at(tip.x_m, tip.y_m)
+    if c0 is not None and reachable[c0]:
+        return tip
+
+    r_cells = max(1, int(max_offset_m / terrain.cell_m))
+    i0, j0 = terrain.ij(c0) if c0 is not None else (0, 0)
+    best: tuple[float, int] | None = None
+    for dj in range(-r_cells, r_cells + 1):
+        j = j0 + dj
+        if not (0 <= j < terrain.ny):
+            continue
+        for di in range(-r_cells, r_cells + 1):
+            i = i0 + di
+            if not (0 <= i < terrain.nx):
+                continue
+            c = terrain.idx(i, j)
+            if not reachable[c]:
+                continue
+            x, y = terrain.xy(c)
+            d = math.hypot(x - tip.x_m, y - tip.y_m)
+            if d <= max_offset_m and (best is None or d < best[0]):
+                best = (d, c)
+    if best is None:
+        return None
+    x, y = terrain.xy(best[1])
+    return TipPosition(x, y, tip.heading_rad, tip.phase, tip.area, tip.bench, tip.seq)
 
 
 def _doze(
