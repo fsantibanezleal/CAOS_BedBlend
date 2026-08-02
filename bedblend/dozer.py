@@ -145,8 +145,15 @@ def level(
     if target_z is None:
         target_z = sum(terrain.z[c] for c in cells) / len(cells)
 
-    highs = sorted((c for c in cells if terrain.z[c] > target_z + tolerance_m),
-                   key=lambda c: -terrain.z[c])
+    # ONLY PLACED MATERIAL CAN BE PUSHED. A dozer spreads the stockpile, it does not excavate the
+    # ground the stockpile sits on. Selecting high cells by elevation alone is correct on a flat pad
+    # and catastrophic on any of the four sloping fill types: on a sidehill the high ground IS the
+    # hill, and the blade drove a cell 4.43 m below the original surface, which is excavation nobody
+    # performed and which broke the ledger against the terrain.
+    highs = sorted(
+        (c for c in cells if terrain.z[c] > target_z + tolerance_m and terrain.thickness(c) > tolerance_m),
+        key=lambda c: -terrain.z[c],
+    )
     if not highs:
         return DozerPass()
 
@@ -168,7 +175,10 @@ def level(
         excess_m = terrain.z[c] - target_z
         if excess_m <= tolerance_m:
             continue
-        budget = min(excess_m * area_m2, blade_m3)
+        # Capped by what is actually there: a cell cannot shed ground it never received.
+        budget = min(excess_m * area_m2, blade_m3, terrain.thickness(c) * area_m2)
+        if budget <= 0:
+            continue
         cx, cy = terrain.xy(c)
 
         reach: list[tuple[float, int]] = []
