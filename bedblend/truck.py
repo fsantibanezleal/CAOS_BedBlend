@@ -153,8 +153,15 @@ class NoRoute(Exception):
     """
 
 
-def _passable(terrain: Terrain, c: int, max_grade: float) -> bool:
-    return terrain.gradient(c) <= max_grade
+def passable_mask(terrain: Terrain, max_grade: float) -> list[bool]:
+    """Trafficability for the whole pad, computed once.
+
+    Computing it per A* edge visit was the dominant cost of a build: the search touches thousands of
+    cells, each gradient check itself walks eight neighbours, and two routes are solved per load. One
+    pass over the pad costs what a few hundred of those checks cost, and the surface does not change
+    during a single route solve.
+    """
+    return [terrain.gradient(c) <= max_grade for c in range(terrain.n_cells)]
 
 
 def solve_route(
@@ -164,6 +171,7 @@ def solve_route(
     *,
     max_grade: float,
     simplify: bool = True,
+    passable: list[bool] | None = None,
 ) -> Route:
     """A shortest drivable path from ``start`` to ``goal``, as A* over the trafficable cells.
 
@@ -179,7 +187,8 @@ def solve_route(
     g = terrain.cell_at(*goal)
     if s is None or g is None:
         raise NoRoute(f"start {start} or goal {goal} is off the pad")
-    if not _passable(terrain, s, max_grade):
+    ok = passable if passable is not None else passable_mask(terrain, max_grade)
+    if not ok[s]:
         raise NoRoute(f"the truck cannot stand at its start {start}")
 
     def h(c: int) -> float:
@@ -201,7 +210,7 @@ def solve_route(
         seen.add(c)
         cx, cy = terrain.xy(c)
         for n in terrain.neighbours(c):
-            if n != g and not _passable(terrain, n, max_grade):
+            if n != g and not ok[n]:
                 continue
             nx_, ny_ = terrain.xy(n)
             step = math.hypot(nx_ - cx, ny_ - cy)
@@ -352,7 +361,8 @@ class Fleet:
         truck.payload = payload
         truck.state = CycleState.HAUL_LOADED
         truck.approach = solve_route(
-            terrain, self.shovel_xy, (tip.x_m, tip.y_m), max_grade=self.max_grade
+            terrain, self.shovel_xy, (tip.x_m, tip.y_m), max_grade=self.max_grade,
+            passable=passable_mask(terrain, self.max_grade),
         )
 
         truck.state = CycleState.SPOTTING
@@ -382,7 +392,8 @@ class Fleet:
         truck.state = CycleState.HAUL_EMPTY
         try:
             truck.departure = solve_route(
-                terrain, (truck.x_m, truck.y_m), target, max_grade=self.max_grade
+                terrain, (truck.x_m, truck.y_m), target, max_grade=self.max_grade,
+                passable=passable_mask(terrain, self.max_grade),
             )
         except NoRoute:
             # The load just placed can cut off the way out. That is a real and reportable situation:

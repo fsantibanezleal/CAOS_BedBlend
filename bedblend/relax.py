@@ -319,8 +319,19 @@ def settle(
         terrain.z, terrain.nx, terrain.ny, terrain.cell_m, fresh_deg, active=active
     )
     # The settling stage cannot be seeded from the deposit alone: the first stage has already moved
-    # material outward, so the cells that are now over-steep are not the cells that were written.
-    second = cascade(terrain.z, terrain.nx, terrain.ny, terrain.cell_m, repose_deg, active=None)
+    # material outward, so cells that were never written can now be over-steep. But it must not fall
+    # back to seeding the whole pad either. Doing that costs a full-pad heapify on EVERY load, which
+    # measured out as the dominant cost of a build and made an end-to-end run unusable. The correct
+    # seed set is the deposit plus every cell the first stage touched, since a cell that neither
+    # received material nor had a neighbour change cannot have become unstable.
+    if active is None:
+        seed: set[int] | None = None
+    else:
+        seed = set(active)
+        for a, b, _ in first:
+            seed.add(a)
+            seed.add(b)
+    second = cascade(terrain.z, terrain.nx, terrain.ny, terrain.cell_m, repose_deg, active=seed)
     assert_stable(terrain, repose_deg)
     return first + second
 
