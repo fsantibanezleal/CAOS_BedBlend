@@ -148,13 +148,13 @@ class BlockModel:
             if vol_m3 <= 0 or src == dst:
                 continue
             want = vol_m3 / self.cell_area_m2      # thickness to remove
-            moved = self._take_from_top(src, want)
+            moved = self.take_from_top(src, want)
             d = distances[k] if distances is not None else 0.0
             for p in moved:
                 p.displacement_m += d
             self._stack_onto(dst, moved)
 
-    def _take_from_top(self, c: int, thickness_m: float) -> list[Parcel]:
+    def take_from_top(self, c: int, thickness_m: float) -> list[Parcel]:
         """Remove ``thickness_m`` from the top of a column and return it, splitting a parcel if needed."""
         out: list[Parcel] = []
         want = thickness_m
