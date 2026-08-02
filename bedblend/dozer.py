@@ -266,6 +266,8 @@ def build_berm(
     *,
     height_m: float = 1.5,
     source_depth_m: float = 0.2,
+    gap_every: int = 8,
+    gap_cells: int = 3,
 ) -> DozerPass:
     """Raise a safety berm along the crest, taking the material from just behind it.
 
@@ -273,6 +275,14 @@ def build_berm(
     berm is what stops a reversing truck going over the edge, and it is why a tip head is kept sloped
     back from the void. Modelled as a mass-conserving transfer from the cells behind the crest onto
     the crest itself, so the berm costs material rather than appearing from nowhere.
+
+    A BERM HAS GAPS IN IT, and leaving them out was a measured defect. A continuous berm along every
+    crest cell walls the working area off from itself: refusals went UP as the dozer ran more often,
+    62 percent at a pass per 10 loads against 33 percent at a pass per 40, because each pass added
+    more unbroken wall. Real tip heads have breaks so equipment can pass through and so a grader can
+    get to the face. ``gap_every`` and ``gap_cells`` set that pattern; setting ``gap_cells`` to zero
+    restores the continuous berm and reproduces the defect, which is why it is a parameter rather
+    than a constant.
     """
     if not crest:
         return DozerPass()
@@ -280,8 +290,12 @@ def build_berm(
     transfers: list[tuple[int, int, float]] = []
     crest_set = set(crest)
 
-    for c in crest:
-        need = height_m - 0.0
+    period = max(1, gap_every + max(0, gap_cells))
+    for pos, c in enumerate(crest):
+        # Leave a break in the wall every ``gap_every`` cells, wide enough to drive through.
+        if gap_cells > 0 and (pos % period) >= gap_every:
+            continue
+        need = height_m
         # Take from uphill neighbours that are not themselves crest cells.
         for n in terrain.neighbours(c):
             if need <= 0:

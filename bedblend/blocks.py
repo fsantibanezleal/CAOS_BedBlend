@@ -58,6 +58,10 @@ class Parcel:
     area: str
     grade_uncertainty: float = 0.0
     displacement_m: float = 0.0
+    # Local coarse fraction of THIS parcel. Set per cell by the face-segregation model, so a cell near
+    # the toe records a coarser split than one near the crest of the same load. Without it the ledger
+    # would report one size for a load the face has already sorted.
+    coarse_fraction: float = 0.0
 
     @property
     def thickness_m(self) -> float:
@@ -107,6 +111,7 @@ class BlockModel:
         lift: int,
         area: str,
         grade_uncertainty: float = 0.0,
+        coarse_fraction: float | list[float] = 0.0,
     ) -> None:
         """Record a placement.
 
@@ -114,9 +119,11 @@ class BlockModel:
         been updated, because the new material occupies the top of each column. Passing the pre-dump
         terrain would file every parcel one load too low.
         """
-        for c, dz in zip(cells, added_m, strict=True):
+        per_cell = isinstance(coarse_fraction, list)
+        for k, (c, dz) in enumerate(zip(cells, added_m, strict=True)):
             if dz <= 0.0:
                 continue
+            cf = coarse_fraction[k] if per_cell else coarse_fraction
             top = terrain.z[c]
             self.columns[c].append(
                 Parcel(
@@ -128,6 +135,7 @@ class BlockModel:
                     lift=lift,
                     area=area,
                     grade_uncertainty=grade_uncertainty,
+                    coarse_fraction=cf,
                 )
             )
 
@@ -206,6 +214,21 @@ class BlockModel:
             t += p.thickness_m * p.grade
             w += p.thickness_m
         return t / w if w > 0 else None
+
+    def column_coarse(self, c: int) -> float | None:
+        """Thickness-weighted coarse fraction of a column, or ``None`` where there is no material.
+
+        This is the field that makes segregation visible: a cut through the toe of a face should read
+        coarser than one through its crest, and if it does not, the sorting never reached the ledger.
+        """
+        t = w = 0.0
+        for p in self.columns[c]:
+            t += p.thickness_m * p.coarse_fraction
+            w += p.thickness_m
+        return t / w if w > 0 else None
+
+    def coarse_field(self) -> list[float | None]:
+        return [self.column_coarse(c) for c in range(self.nx * self.ny)]
 
     def grade_field(self) -> list[float | None]:
         return [self.column_grade(c) for c in range(self.nx * self.ny)]
