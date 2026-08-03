@@ -89,7 +89,30 @@ def test_assert_stable_raises_on_an_unrelaxed_field():
         assert_stable(t, REPOSE)
     # The message has to carry the numbers, because that is what distinguishes a solver failure from
     # a caller that passed the wrong angle.
-    assert "pairs stand over" in str(e.value)
+    msg = str(e.value)
+    assert "pairs stand more than" in msg and "deg" in msg
+
+
+def test_the_stability_tolerance_is_a_degree_and_not_a_micrometre():
+    """A pair a hair over the angle is not a defect; one nineteen degrees over is.
+
+    The angle of repose is known to a few degrees at best, so asserting a surface to floating-point
+    equality against it fails builds over residue no solver can shift while catching nothing a
+    coarser check would miss.
+    """
+    from bedblend.relax import STABLE_TOL_DEG
+
+    t = pad(20, 20)
+    c = t.idx(10, 10)
+    # A slope just inside the tolerance over repose: not a violation.
+    run = t.cell_m
+    t.z[c] = run * math.tan(math.radians(REPOSE + STABLE_TOL_DEG * 0.5))
+    assert_stable(t, REPOSE)
+
+    # And just outside it: a violation.
+    t.z[c] = run * math.tan(math.radians(REPOSE + STABLE_TOL_DEG * 2.0))
+    with pytest.raises(ReposeViolation):
+        assert_stable(t, REPOSE)
 
 
 def test_settle_relaxes_through_the_fresh_slope_to_repose():

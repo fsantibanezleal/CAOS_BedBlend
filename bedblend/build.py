@@ -356,9 +356,14 @@ def build(
             model.assert_consistent(terrain)
 
     # Every area gets a closing pass, so the surface a reader sees is a finished floor rather than
-    # whatever the last load happened to leave.
+    # whatever the last load happened to leave. ACCESS WORK ONLY: a berm is a windrow for a truck
+    # reversing at a LIVE tip head, and a campaign that has finished does not have one. Raising a
+    # wall around a completed pile is not what a dozer does, and it was the last operation before the
+    # surface was checked, which made it the most expensive place to leave material standing.
     for area in plan.areas:
-        result.dozer_passes.extend(_doze(terrain, model, area, crest_drop_m, repose_deg, fleet.max_grade))
+        result.dozer_passes.extend(
+            _doze(terrain, model, area, crest_drop_m, repose_deg, fleet.max_grade, access_only=True)
+        )
 
     if snapshot_every:
         result.snapshots.append((seq, len(result.placed), list(terrain.z)))
