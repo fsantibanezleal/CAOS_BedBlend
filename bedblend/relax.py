@@ -287,12 +287,23 @@ def count_over_repose(
             if not (0 <= ni < nx and 0 <= nj < ny):
                 continue
             run = cell_m * (math.sqrt(2.0) if k >= 4 else 1.0)
-            drop = zc - z[nj * nx + ni]
+            zn = z[nj * nx + ni]
+            drop = zc - zn
             if drop <= 0.0:
                 continue
             worst_deg = max(worst_deg, math.degrees(math.atan(drop / run)))
-            if drop - run * slope > VERIFY_TOL_M:
-                n_over += 1
+            if drop - run * slope <= VERIFY_TOL_M:
+                continue
+            # AND THE STEEPNESS HAS TO BE THE MATERIAL'S. Skipping bare cells is not enough: a cell
+            # carrying a thin skin of material over ground that already stands steep is flagged, and
+            # NOTHING can clear it. Shedding every grain it has leaves the ground, and the ground is
+            # still over the angle. The cascade knows this and correctly declines to move anything;
+            # the check did not, so the two disagreed and a build died on a surface that was as
+            # relaxed as it can physically be. Measured on a sidehill: 65 pairs, worst 49.1 degrees,
+            # every one of them inherited. The test is whether removing the material would fix it.
+            if floor is not None and (floor[c] - zn) - run * slope > VERIFY_TOL_M:
+                continue
+            n_over += 1
     return n_over, worst_deg
 
 

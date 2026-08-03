@@ -4,6 +4,59 @@ All notable changes to `bedblend` are recorded here. The format follows Keep a C
 top, and the versions follow `X.XX.XXX` (the manifest carries the semver form with the padding
 dropped).
 
+## [0.05.000] - 2026-08-03
+
+### Fixed, and every one of these was measured rather than reasoned about
+
+- **Trafficability was the wrong test.** A cell was undrivable if ANY of its eight neighbours was
+  steep, which on a pile at repose condemns the whole crest, the whole perimeter and the toe of every
+  face. The working level was unreachable by construction. It is now the local surface tilt by
+  central differences, and whether the next cell can be reached is asked separately, per step, by
+  both the flood fill and the router. A graded ramp cut into a clean 8 m platform went from 30 of
+  1296 cells reachable to 1286.
+- **The access point defaulted to a corner inside the pile.** It is the midpoint of the open edge.
+- **The ramp was a reserved void.** A corridor that must rise to the working level needs as much fill
+  as a share of the bench, shoved in sideways by a blade with a fifteen-metre reach, while the trucks
+  that could supply it are forbidden from driving there. Trucks now fill the whole area and the dozer
+  CUTS the road back into it. `build_ramp` also only ever filled, so a buried corridor returned zero
+  transfers and did nothing.
+- **The ramp was graded to exactly the machine limit,** so drivability was decided by rounding. It is
+  built at 85 percent of the limit, and the corridor spans the area rather than stopping at its
+  centre, which takes the lift it can serve from about 19 m to 34 m.
+- **A refused tip could be re-spotted outside its own area,** which is a licence to tip in the haul
+  road. It silted up the access and buried the loading point, after which nothing on the pad was
+  reachable. Alternative spots are confined to the area.
+- **Dump areas sat flush against the pad origin,** so a dump on the near edge cascaded off the array:
+  221 of 766 planned tips on the reference scenario lost to the edge of an array. Areas are offset by
+  a margin.
+- **The stability invariant flagged steepness it was impossible to clear.** A cell carrying a thin
+  skin over ground that already stands steep can shed every grain it has and still be over the angle.
+  The cascade knew this and declined to move anything; the check did not, so a build died on a
+  surface that was as relaxed as it can physically be. Measured on a sidehill: 65 pairs, worst 49.1
+  degrees, every one inherited from the landform.
+
+### Changed
+
+- `bench_program` fills a bench in LIFTS on a shrinking footprint, each inset by the horizontal run
+  of a face at repose, and each carrying only the volume its own footprint holds at one lift
+  thickness. It used to emit one lattice and one set of sweeps per bench and declare it complete:
+  332 tips against a design of 1360.
+- A bench's designed volume is the actual frustum at repose, by the prismatoid rule, not a blunt
+  fraction of its bounding box. The fraction asked a 60 m square to hold 51,500 cubic metres of a
+  shape whose capacity is 27,100.
+- The dozer cadence is split: access work (grade the ramp, level the floor) every 12 loads, and the
+  full visit that adds the crest push and the safety berm every 60. A berm is by construction a wall,
+  and running it on the access cadence ringed the area.
+- `level` accepts a `band_m` that restricts the blade to the working bench. It is NOT used by the
+  default build: it was tried and the measurement did not support it, taking the peak from 13.6 m to
+  12.0 and breaking three reclaim invariants.
+
+### Result on the reference scenario
+
+744 of 766 planned loads placed, zero refused for access, the designed volume delivered to within
+three percent, and the surface passing every invariant. Before this release the same scenario placed
+298 loads with 47 percent refused, and 284 of those 298 had landed outside their own dump area.
+
 ## [0.04.001] - 2026-08-03
 
 ### Fixed

@@ -122,6 +122,7 @@ def level(
     push_m: float = DEFAULT_PUSH_M,
     blade_m3: float = DEFAULT_BLADE_M3,
     tolerance_m: float = 0.05,
+    band_m: float | None = None,
 ) -> DozerPass:
     """Spread the heaps in ``area`` into a level working floor, conserving mass exactly.
 
@@ -137,10 +138,24 @@ def level(
     nearest-first rule matters for the ledger as much as for the geometry: a dozer shoves material a
     short distance, so provenance smears locally rather than teleporting across the pile, and the
     displacement statistic this returns reflects that.
+
+    ``band_m`` restricts the blade to cells within that distance of the current working level, which
+    is what a dozer working a bench actually does. It is available and NOT used by the default build.
+    It was tried, on the reasoning that levelling the whole footprint to its mean flattens the frustum
+    the plan is insetting lift by lift, and the measurement did not support it: the peak fell from
+    13.6 m to 12.0 and three reclaim invariants broke, because a pile with untouched flanks drains
+    differently than the campaign assumes. Left in, unused, with the result recorded, rather than
+    removed and rediscovered.
     """
     cells = _cells_of(terrain, area)
     if not cells:
         return DozerPass()
+
+    if band_m is not None:
+        top = max(terrain.z[c] for c in cells)
+        cells = [c for c in cells if terrain.z[c] >= top - band_m]
+        if not cells:
+            return DozerPass()
 
     if target_z is None:
         target_z = sum(terrain.z[c] for c in cells) / len(cells)
@@ -327,30 +342,50 @@ def build_ramp(
     max_grade: float,
     push_m: float = DEFAULT_PUSH_M,
     tolerance_m: float = 0.15,
+    grade_frac: float = 0.85,
 ) -> DozerPass:
-    """Raise the reserved access corridor into a drivable RAMP up onto the current working level.
+    """Cut and fill the access corridor into a drivable RAMP up onto the current working level.
 
-    THE MECHANIC THIS COMPLETES. Reserving a corridor in plan keeps material off it, which is
-    necessary and not sufficient: once the base layer is up, the corridor is a trench between the
-    pad and a working level a truck cannot climb. Dump design is explicit that access to successive
-    lifts is achieved by ESTABLISHING RAMPS of a suitable width and gradient, and that establishing
-    is work the dozer does.
+    THE RAMP IS A CUT IN THE FILL, NOT A VOID RESERVED IN IT, and that distinction is the whole
+    mechanic. Dump design is explicit that access to successive lifts is achieved by ESTABLISHING
+    RAMPS of a suitable width and gradient, and that establishing is work the dozer does.
 
-    Measured before this existed: on a 70 m area with an 18 m bench, 69.8 percent of planned tips were
-    refused and the pile stalled at 9.6 m, because nothing could drive onto what had been built.
+    The first design reserved the corridor in plan and kept every tip off it. That reads as sensible
+    and it cannot work: a corridor 25 m wide and 58 m long that has to rise to the working level needs
+    as much material as a sizeable fraction of the lift itself, all of it shoved in sideways by a
+    blade with a fifteen-metre reach, while the trucks that could have supplied it are forbidden from
+    driving there. Measured on a 90 m area: the entire 1296-cell area came out unreachable at a peak
+    of 3.2 m, because the corridor stayed a trench with 3 m walls on both sides and there was no way
+    up out of it.
+
+    So the trucks fill the whole area, corridor included, and the dozer cuts the road back into what
+    they filled, every pass. The material is then always right where the blade needs it.
+
+    Measured before any of this existed: on a 70 m area with an 18 m bench, 69.8 percent of planned
+    tips were refused and the pile stalled at 9.6 m, because nothing could drive onto what had been
+    built.
 
     HOW IT IS BUILT. The corridor is graded from the access point up to the level of the material at
     its inner end, at no more than ``max_grade``. Material is taken from the nearest cells that stand
     ABOVE the target profile, so the ramp is cut and filled out of the pile rather than conjured:
     mass is conserved exactly, and a ramp that cannot be supplied comes out partial rather than
     fabricated.
+
+    IT CUTS AS WELL AS FILLS, and that is what makes it work at all. Reserving the corridor in the
+    plan does not keep it clear: a dump placed beside it spreads, and the spill stands wherever it
+    lands. The first version only raised cells that were BELOW the target profile, so a corridor
+    buried to two metres right at its mouth was left with a single-cell step of 0.63 grade against a
+    truck limit of 0.50, and the flood fill could not get onto the ramp from the pad. Every cell of
+    the corridor was individually passable and the area was unreachable: 92.7 percent of tips refused
+    and the pile stalled at 4.07 m. A dozer grading a ramp blades the high spots down and shoves them
+    into the low ones. So does this, and the cut supplies the fill before any of the pile is touched.
     """
     cells = _cells_of(terrain, area)
     if not cells:
         return DozerPass()
 
     ax, ay = area.access
-    cx, cy = area.centre
+    cx, cy = area.ramp_far
     vx, vy = cx - ax, cy - ay
     span = math.hypot(vx, vy)
     if span < 1e-9:
@@ -361,11 +396,16 @@ def build_ramp(
     if not ramp:
         return DozerPass()
 
-    # The top of the ramp is whatever the pile stands at where the corridor meets the working area.
+    # THE RAMP CLIMBS TO THE WORKING LEVEL. Where exactly is a trade measured rather than argued:
+    # the sixtieth percentile leaves the road at mid-height while the crest advances above it, and
+    # the ninetieth cuts so much of the pile into the road that the peak falls (measured 13.3 m to
+    # 11.1 m). Three quarters is where placement was best. It is deliberately not the highest cell,
+    # because one fresh dump should not redefine the road.
     inner = [c for c in cells if not area.on_ramp(*terrain.xy(c)) and terrain.has_material(c)]
     if not inner:
         return DozerPass()
-    top = sorted(terrain.z[c] for c in inner)[int(len(inner) * 0.6)]
+    ordered = sorted(terrain.z[c] for c in inner)
+    top = ordered[min(int(len(ordered) * 0.75), len(ordered) - 1)]
 
     area_m2 = terrain.cell_m * terrain.cell_m
     transfers: list[tuple[int, int, float]] = []
@@ -377,19 +417,82 @@ def build_ramp(
         along = (x - ax) * vx + (y - ay) * vy
         if along < 0:
             continue
-        want = min(terrain.z0[c] + along * max_grade, top)
+        want = min(terrain.z0[c] + along * max_grade * grade_frac, top)
         if want - terrain.z[c] > tolerance_m:
             need.append((c, want - terrain.z[c]))
-    if not need:
-        return DozerPass()
+
+    # NO EARLY RETURN ON AN EMPTY `need`. That is the common case and it is the case that matters: a
+    # corridor buried level with the platform has nothing BELOW the target profile, only material
+    # above it, so bailing here meant the ramp was never cut and the whole area stayed walled off.
+    # Measured on a clean 3 m platform: build_ramp returned zero transfers and the area went from
+    # 0 of 1296 cells reachable to 0 of 1296.
 
     ramp_set = set(ramp)
     pool = [c for c in cells if c not in ramp_set]
 
-    # DONORS ARE LOCAL. Sorting the whole area by elevation and taking the highest first builds the
-    # ramp out of the CROWN OF THE PILE, which measurably lowered the peak from 9.6 m to 5.2 m while
-    # making access no better. A dozer building a ramp shoves material in from the ground beside it,
-    # so donors are the nearest cells that stand above the ramp target, and only those within reach.
+    # THE CUT, FIRST. Corridor cells standing above the target profile are bladed down to it, never
+    # below the original ground, and what comes off is the first material offered to the cells that
+    # are short. This is what turns a buried corridor back into a ramp.
+    #
+    # EVERY MOVEMENT IS A RECORDED TRANSFER. The blade moves mass, and the lot ledger has to follow it
+    # cell by cell; a scalar "spoil" bucket would balance the terrain and silently desynchronise the
+    # provenance record that the whole product rests on.
+    cut: list[list] = []
+    for c in ramp:
+        x, y = terrain.xy(c)
+        along = (x - ax) * vx + (y - ay) * vy
+        if along < 0:
+            continue
+        want = min(terrain.z0[c] + along * max_grade * grade_frac, top)
+        excess = terrain.z[c] - max(want, terrain.z0[c])
+        if excess > tolerance_m:
+            cut.append([c, min(excess, terrain.thickness(c))])
+
+    # The cut supplies the fill before any of the pile is touched. Cells needing most go first, so
+    # the deepest part of the trench closes rather than every cell getting a smear.
+    for c, deficit in sorted(need, key=lambda t: -t[1]):
+        remaining = deficit
+        for entry in cut:
+            if remaining <= tolerance_m:
+                break
+            d, avail = entry
+            if avail <= tolerance_m:
+                continue
+            take = min(remaining, avail)
+            terrain.z[d] -= take
+            terrain.z[c] += take
+            transfers.append((d, c, take * area_m2))
+            entry[1] = avail - take
+            remaining -= take
+
+    # Whatever the corridor still has to shed is shoved sideways onto the nearest cell of the working
+    # area, which is where a blade actually puts it. The relaxation that follows the pass spreads it.
+    for d, avail in cut:
+        if avail <= tolerance_m or not pool:
+            continue
+        dx_, dy_ = terrain.xy(d)
+
+        def _dist(q: int, _x: float = dx_, _y: float = dy_) -> float:
+            qx, qy = terrain.xy(q)
+            return math.hypot(qx - _x, qy - _y)
+
+        sink = min(pool, key=_dist)
+        terrain.z[d] -= avail
+        terrain.z[sink] += avail
+        transfers.append((d, sink, avail * area_m2))
+
+    # Whatever the cut could not cover is re-measured against the profile the corridor now has, and
+    # made up out of the pile beside it.
+    need = []
+    for c in ramp:
+        x, y = terrain.xy(c)
+        along = (x - ax) * vx + (y - ay) * vy
+        if along < 0:
+            continue
+        want = min(terrain.z0[c] + along * max_grade * grade_frac, top)
+        if want - terrain.z[c] > tolerance_m:
+            need.append((c, want - terrain.z[c]))
+
     for c, deficit in need:
         remaining = deficit
         cxm, cym = terrain.xy(c)
