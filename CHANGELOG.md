@@ -4,6 +4,15 @@ All notable changes to `bedblend` are recorded here. The format follows Keep a C
 top, and the versions follow `X.XX.XXX` (the manifest carries the semver form with the padding
 dropped).
 
+## [0.03.001] - 2026-08-03
+
+### Fixed
+
+- `build` takes `paddock_frac`, the share of a bench laid as base layer before the edge campaign
+  starts. It was fixed at 0.35 inside the plan, which starved the edge campaign on a tall bench: the
+  whole load budget went into paddock dumps, no face was ever formed, and none of the cascade physics
+  ran. A base layer is one lift of heaps, roughly a sixth of an 18 m bench, so the default is 0.18.
+
 ## [0.03.000] - 2026-08-02
 
 The physics the engine was missing. 0.02.000 rebuilt the geometry correctly but still carried three

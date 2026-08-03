@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 
 from .blocks import BlockModel, transfer_distances
 from .design import DumpPlan, Phase, TipPosition
-from .dozer import DozerPass, build_berm, level, push_to_crest
+from .dozer import DozerPass, build_berm, build_ramp, level, push_to_crest
 from .dump import (
     DumpProfile,
     Placement,
@@ -156,6 +156,12 @@ def build(
     seed: int = 20260801,
     crest_drop_m: float = 1.0,
     max_spot_offset_m: float = 25.0,
+    # How much of a bench goes down as paddock base layer before the edge campaign starts. The base
+    # layer is ONE lift of heaps, a couple of metres over the footprint, which against a tall bench is
+    # a small fraction of its volume. Setting it too high starves the edge campaign: the load budget
+    # is consumed in paddock dumps and no face is ever formed to cascade over, so none of the cascade
+    # physics runs at all.
+    paddock_frac: float = 0.18,
     material: Material = DEFAULT_MATERIAL,
     route: Callable[[Payload], str] | None = None,
     verify_every: int = 0,
@@ -223,7 +229,8 @@ def build(
             prev_top = bench.top_m
             run_out = run_out_for_bench(bench_height, face_deg)
             for tip in plan.bench_program(
-                area, bench, load_volume_m3=load_volume, run_out_m=run_out
+                area, bench, load_volume_m3=load_volume, run_out_m=run_out,
+                paddock_frac=paddock_frac,
             ):
                 q.append((tip, run_out, bench.index))
         queues[area.name] = q
@@ -286,7 +293,7 @@ def build(
         dozer_counts[name] += 1
         if dozer_counts[name] >= plan.loads_per_dozer_pass:
             dozer_counts[name] = 0
-            result.dozer_passes.extend(_doze(terrain, model, area, crest_drop_m, repose_deg))
+            result.dozer_passes.extend(_doze(terrain, model, area, crest_drop_m, repose_deg, fleet.max_grade))
 
         if verify_every and seq % verify_every == 0:
             model.assert_consistent(terrain)
@@ -294,7 +301,7 @@ def build(
     # Every area gets a closing pass, so the surface a reader sees is a finished floor rather than
     # whatever the last load happened to leave.
     for area in plan.areas:
-        result.dozer_passes.extend(_doze(terrain, model, area, crest_drop_m, repose_deg))
+        result.dozer_passes.extend(_doze(terrain, model, area, crest_drop_m, repose_deg, fleet.max_grade))
 
     model.assert_consistent(terrain)
     return result
@@ -455,7 +462,8 @@ def _nearest_reachable(
 
 
 def _doze(
-    terrain: Terrain, model: BlockModel, area, crest_drop_m: float, repose_deg: float
+    terrain: Terrain, model: BlockModel, area, crest_drop_m: float, repose_deg: float,
+    max_grade: float = 0.5,
 ) -> list[DozerPass]:
     """A dozer visit: level the floor, push material out over the face, raise the berm.
 
@@ -463,6 +471,13 @@ def _doze(
     material standing steeper than it can hold.
     """
     out: list[DozerPass] = []
+
+    # THE RAMP FIRST. Without it the reserved corridor is a trench between the pad and a working
+    # level nothing can climb, and the build stalls with most of its planned tips refused.
+    r = build_ramp(terrain, area, max_grade=max_grade)
+    if r.transfers:
+        model.apply_transfers(r.transfers, distances=transfer_distances(terrain, r.transfers))
+        out.append(r)
 
     p = level(terrain, area)
     if p.transfers:
