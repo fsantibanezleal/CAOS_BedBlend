@@ -4,6 +4,25 @@ All notable changes to `bedblend` are recorded here. The format follows Keep a C
 top, and the versions follow `X.XX.XXX` (the manifest carries the semver form with the padding
 dropped).
 
+## [0.04.001] - 2026-08-03
+
+### Fixed
+
+- `settle` sweeps the whole pad when its seeded second pass leaves anything standing over the angle
+  of repose. With a ground floor a cell's transfer can be cut short by the rock beneath it, and the
+  cell it would have fed is then left marginally over the angle without ever having been queued.
+  Measured on a valley fill: four pairs at 38.2 degrees against an imposed 37. The check is O(cells)
+  and the extra sweep only runs when it is needed, so correctness costs nothing on the common path.
+
+## [0.04.000] - 2026-08-03
+
+### Changed
+
+- BREAKING: a snapshot is now `(seq, placed, surface)` rather than `(placed, surface)`. The sequence
+  number of the load just placed is what lets a player show the truck that is WORKING RIGHT NOW
+  instead of every path ever driven, which is the difference between watching a build and looking at
+  a diagram of one.
+
 ## [0.03.002] - 2026-08-03
 
 ### Added

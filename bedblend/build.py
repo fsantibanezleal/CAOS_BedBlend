@@ -125,10 +125,10 @@ class BuildResult:
     loads: list[LoadRecord] = field(default_factory=list)
     dozer_passes: list[DozerPass] = field(default_factory=list)
     # SURFACE SNAPSHOTS THROUGH THE BUILD, so the pile can be watched growing rather than only
-    # inspected once finished. Each entry is (loads placed so far, a copy of the surface). A build
-    # that ships only its final state can show what was made but never how, and the how is the
-    # product: the base layer going down, the dozer levelling it, the crest advancing.
-    snapshots: list[tuple[int, list[float]]] = field(default_factory=list)
+    # inspected once finished. Each entry is (sequence number of the load just placed, loads placed
+    # so far, a copy of the surface). The SEQUENCE number matters as much as the count: it is what
+    # lets a player show the truck that is working right now instead of every path ever driven.
+    snapshots: list[tuple[int, int, list[float]]] = field(default_factory=list)
 
     @property
     def placed(self) -> list[LoadRecord]:
@@ -297,7 +297,7 @@ def build(
 
         n_placed = len(result.placed)
         if snapshot_every and n_placed % snapshot_every == 0:
-            result.snapshots.append((n_placed, list(terrain.z)))
+            result.snapshots.append((rec.seq, n_placed, list(terrain.z)))
 
         # The dozer cadence is PER AREA. With several areas in progress a single global counter would
         # doze whichever area happened to receive the hundredth load, which is not how a machine
@@ -316,7 +316,7 @@ def build(
         result.dozer_passes.extend(_doze(terrain, model, area, crest_drop_m, repose_deg, fleet.max_grade))
 
     if snapshot_every:
-        result.snapshots.append((len(result.placed), list(terrain.z)))
+        result.snapshots.append((seq, len(result.placed), list(terrain.z)))
 
     model.assert_consistent(terrain)
     return result
