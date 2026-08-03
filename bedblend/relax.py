@@ -52,6 +52,10 @@ CONVERGE_TOL_M = 1e-9
 # residual comes out at 37.00000004 degrees against an imposed 37. Checking at the solver's own
 # tolerance flags that as a failure, which would make the invariant cry wolf and train a reader to
 # ignore it. A micrometre is far below any physical meaning on a pile and far above float noise.
+# Material thinner than this is not material. A tenth of a millimetre is far below anything the
+# geometry means and far above the noise the solver converges to.
+BARE_M = 1e-3
+
 VERIFY_TOL_M = 1e-6
 
 # 2:1 rise over run, the slope a fresh truck-dumped heap stands at before it settles.
@@ -280,19 +284,38 @@ def count_over_repose(
         # entitled to stand steeper than any ore will, and flagging it would make the invariant
         # meaningless on four of the five published fill types. A cell is only capable of violating
         # repose if it is carrying material that could move.
-        if floor is not None and zc - floor[c] <= VERIFY_TOL_M:
+        # BARE MEANS PHYSICALLY BARE, not "within floating-point noise of bare". The threshold used
+        # to be the verification tolerance, a micrometre, and a cell holding a millimetre of dust
+        # was therefore asked to stand at an angle of repose. It cannot: shedding everything it has
+        # leaves the ground, and the ground is where it already is. Measured on a sidehill and a
+        # ridge, this is what produced violations reported at 37.0 and 37.1 degrees against an
+        # imposed 37, which is the solver being correct and the check being wrong.
+        if floor is not None and zc - floor[c] <= BARE_M:
             continue
         for k, (di, dj) in enumerate(_OFFSETS):
             ni, nj = i + di, j + dj
             if not (0 <= ni < nx and 0 <= nj < ny):
                 continue
             run = cell_m * (math.sqrt(2.0) if k >= 4 else 1.0)
-            drop = zc - z[nj * nx + ni]
+            zn = z[nj * nx + ni]
+            drop = zc - zn
             if drop <= 0.0:
                 continue
             worst_deg = max(worst_deg, math.degrees(math.atan(drop / run)))
-            if drop - run * slope > VERIFY_TOL_M:
-                n_over += 1
+            if drop - run * slope <= VERIFY_TOL_M:
+                continue
+            # AND THE STEEPNESS HAS TO BE THE MATERIAL'S. Skipping bare cells is not enough: a cell
+            # carrying a thin skin of material over ground that already stands steep is flagged, and
+            # NOTHING can clear it. Shedding every grain it has leaves the ground, and the ground is
+            # still over the angle. The cascade knows this and correctly declines to move anything;
+            # the check did not, so the two disagreed and a build died on a surface that was as
+            # relaxed as it can physically be. Measured on a sidehill: 65 pairs, worst 49.1 degrees,
+            # every one of them inherited. The test is whether removing the material would fix it.
+            # The escape allows equality: if shedding every grain the cell has would leave it at or
+            # over the angle, the steepness is the ground's and no solver can take it away.
+            if floor is not None and (floor[c] - zn) - run * slope >= -VERIFY_TOL_M:
+                continue
+            n_over += 1
     return n_over, worst_deg
 
 
@@ -310,10 +333,28 @@ def relax_to(
     already O(moves log moves), so it is not the bottleneck, and the failure it catches is the one that
     shipped. Turn it off only in an inner loop that verifies once at the end.
     """
+    floor = terrain.z0 if respect_ground else None
     moves = cascade(
         terrain.z, terrain.nx, terrain.ny, terrain.cell_m, repose_deg, active=active,
-        floor=terrain.z0 if respect_ground else None,
+        floor=floor,
     )
+
+    # A CASCADE OVER A FLOOR CAN LEAVE A HANDFUL OF PAIRS, and widening the tolerance would be the
+    # wrong way to deal with it. With a floor a cell's transfer can be cut short by the rock beneath
+    # it, and the cell it would have fed is then left marginally over the angle without ever having
+    # been queued. Measured on a ridge crest: 17 pairs, worst 44.0 degrees against an imposed 37.
+    # Correctness wins over speed here, so if anything is left standing the whole pad is swept again.
+    # The check is O(cells) and the sweep only runs when it is needed.
+    for _ in range(3):
+        n_over, _ = count_over_repose(
+            terrain.z, terrain.nx, terrain.ny, terrain.cell_m, repose_deg, floor=floor
+        )
+        if not n_over:
+            break
+        moves += cascade(
+            terrain.z, terrain.nx, terrain.ny, terrain.cell_m, repose_deg, active=None, floor=floor,
+        )
+
     if verify:
         assert_stable(terrain, repose_deg)
     return moves

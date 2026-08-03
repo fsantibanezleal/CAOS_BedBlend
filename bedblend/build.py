@@ -245,6 +245,8 @@ def build(
 
     cursors: dict[str, int] = {name: 0 for name in queues}
     dozer_counts: dict[str, int] = {name: 0 for name in queues}
+    last_doze: dict[str, int] = {name: -999 for name in queues}
+    full_counts: dict[str, int] = {name: 0 for name in queues}
     order = [a.name for a in plan.areas]
 
     for payload in payloads:
@@ -286,9 +288,37 @@ def build(
         rec = _run_one_load(
             terrain, model, fleet, truck, tip, payload, crest, reachable,
             rng=rng, run_out_m=run_out, repose_deg=repose_deg,
-            bench_index=bench_index, seq=seq, max_offset_m=max_spot_offset_m,
+            bench_index=bench_index, seq=seq, area=area, max_offset_m=max_spot_offset_m,
             material=material, face_deg=face_deg,
         )
+        # THE DOZER IS STATIONED AT THE TIP HEAD, and a truck that finds no way in waits for it
+        # rather than driving away. Access was being maintained only on the periodic pass, once every
+        # hundred loads. A hundred paddock dumps is a field of three-metre cones standing at repose,
+        # which no truck crosses, so the area sealed itself off within a few loads of every pass and
+        # stayed sealed until the next one. Measured: 1162 of 1320 planned tips refused for access
+        # and the pile stalled at 2.6 m, while the SAME terrain came out fully reachable at the end,
+        # because the closing pass levelled everything after the loads that needed it were gone.
+        #
+        # Reopening only the RAMP was not enough and the measurement said so plainly: identical
+        # placed count, identical profile census, identical peak. The corridor was never the
+        # blockage. What blocks a truck is the unlevelled floor, so the whole visit runs, and the
+        # rate limit keeps a stretch of genuinely unreachable tips from dozing once per load.
+        if not rec.placed and "no drivable ground" in rec.refused_reason and seq - last_doze[name] >= 2:
+            last_doze[name] = seq
+            passes = _doze(
+                terrain, model, area, crest_drop_m, repose_deg, fleet.max_grade, access_only=True
+            )
+            if passes:
+                result.dozer_passes.extend(passes)
+                crest = terrain.crest_cells(min_drop_m=crest_drop_m)
+                reachable = reachable_mask(terrain, fleet.shovel_xy, fleet.max_grade)
+                rec = _run_one_load(
+                    terrain, model, fleet, truck, tip, payload, crest, reachable,
+                    rng=rng, run_out_m=run_out, repose_deg=repose_deg,
+                    bench_index=bench_index, seq=seq, area=area,
+                    max_offset_m=max_spot_offset_m, material=material, face_deg=face_deg,
+                )
+
         result.loads.append(rec)
         seq += 1
 
@@ -302,10 +332,25 @@ def build(
         # The dozer cadence is PER AREA. With several areas in progress a single global counter would
         # doze whichever area happened to receive the hundredth load, which is not how a machine
         # assigned to a dump area behaves.
+        # THE CADENCE IS SPLIT, because the two kinds of blade work have very different costs and
+        # very different urgency. Keeping the floor drivable and the road open is what decides
+        # whether the NEXT load can be placed at all, and a field of fresh heaps stops being
+        # crossable within a few loads; furnishing the tip head with a crest push and a safety berm
+        # is periodic housekeeping. Running them together on one slow cadence meant access was
+        # restored once every hundred loads and the ninety-nine in between were refused. Running
+        # them together on a fast cadence meant the berm went up every twelve loads and ringed the
+        # area. So: access often, furniture rarely.
         dozer_counts[name] += 1
+        full_counts[name] += 1
         if dozer_counts[name] >= plan.loads_per_dozer_pass:
             dozer_counts[name] = 0
-            result.dozer_passes.extend(_doze(terrain, model, area, crest_drop_m, repose_deg, fleet.max_grade))
+            full = full_counts[name] >= plan.loads_per_full_pass
+            if full:
+                full_counts[name] = 0
+            result.dozer_passes.extend(
+                _doze(terrain, model, area, crest_drop_m, repose_deg, fleet.max_grade,
+                      access_only=not full)
+            )
 
         if verify_every and seq % verify_every == 0:
             model.assert_consistent(terrain)
@@ -338,6 +383,7 @@ def _run_one_load(
     repose_deg: float,
     bench_index: int,
     seq: int,
+    area,
     material: Material = DEFAULT_MATERIAL,
     face_deg: float = 37.0,
 ) -> LoadRecord:
@@ -359,11 +405,11 @@ def _run_one_load(
     # trucks access the dump or stockpile and in what order". The deviation is recorded, because the
     # gap between planned and actual dump locations is real, is what a fleet-management export shows,
     # and is a genuine measure of how good the plan was.
-    actual = _nearest_reachable(terrain, tip, reachable, max_offset_m)
+    actual = _nearest_reachable(terrain, tip, reachable, max_offset_m, area)
     if actual is None:
         base.refused_reason = (
-            f"no drivable ground within {max_offset_m:.0f} m of the planned tip: the pile has grown "
-            f"over its own access here"
+            f"no drivable ground inside area {area.name!r} within {max_offset_m:.0f} m of the "
+            f"planned tip: the pile has grown over its own access here"
         )
         return base
     try:
@@ -440,13 +486,21 @@ def _run_one_load(
 
 
 def _nearest_reachable(
-    terrain: Terrain, tip: TipPosition, reachable: list[bool], max_offset_m: float
+    terrain: Terrain, tip: TipPosition, reachable: list[bool], max_offset_m: float, area
 ) -> TipPosition | None:
     """The closest spot to the planned tip that the truck can actually get to, or None.
 
     The plan is always tried first, so a feasible plan is followed exactly. Otherwise the search
     walks outward over cells the flood fill already marked reachable, which costs a bounded scan
     rather than one route solve per candidate.
+
+    THE ALTERNATIVE SPOT MUST BE INSIDE THE DUMP AREA. Without that
+    constraint the offset is just a licence to tip in the haul road: measured on the reference
+    scenario, 284 of 402 placed loads landed outside their own area, the road silted up, the loading
+    point was buried under material nobody planned to put there, and from that moment the flood fill
+    returned nothing reachable anywhere on the pad and every remaining load was refused. A truck that
+    cannot reach its tip is redirected to another tip in the same area or it is refused. It does not
+    dump on the road, and neither does this.
     """
     c0 = terrain.cell_at(tip.x_m, tip.y_m)
     if c0 is not None and reachable[c0]:
@@ -467,6 +521,8 @@ def _nearest_reachable(
             if not reachable[c]:
                 continue
             x, y = terrain.xy(c)
+            if not area.contains(x, y):
+                continue
             d = math.hypot(x - tip.x_m, y - tip.y_m)
             if d <= max_offset_m and (best is None or d < best[0]):
                 best = (d, c)
@@ -478,12 +534,20 @@ def _nearest_reachable(
 
 def _doze(
     terrain: Terrain, model: BlockModel, area, crest_drop_m: float, repose_deg: float,
-    max_grade: float = 0.5,
+    max_grade: float = 0.5, *, access_only: bool = False,
 ) -> list[DozerPass]:
     """A dozer visit: level the floor, push material out over the face, raise the berm.
 
     Each operation carries the ledger, and the surface is relaxed afterwards, because a blade leaves
     material standing steeper than it can hold.
+
+    ``access_only`` runs the two operations that OPEN THE ROAD and skips the two that furnish the
+    tip head. The distinction is not cosmetic. A berm is a windrow at the crest for a reversing truck
+    to feel, and it is by construction a wall; run it often enough and it rings the area. Measured:
+    with the full visit on every access refusal the whole 1296-cell area came out unreachable at a
+    peak of 3.2 m, and the peak DROPPED across the visit, from 3.53 to 3.21, because the blade was
+    taking the crown to build the wall that was sealing the area. A truck waiting at the gate wants
+    the ramp graded and the floor levelled. It does not want a berm.
     """
     out: list[DozerPass] = []
 
@@ -498,6 +562,10 @@ def _doze(
     if p.transfers:
         model.apply_transfers(p.transfers, distances=transfer_distances(terrain, p.transfers))
         out.append(p)
+
+    if access_only:
+        _carry(model, terrain, relax_to(terrain, repose_deg))
+        return out
 
     crest = terrain.crest_cells(min_drop_m=crest_drop_m)
     if crest:

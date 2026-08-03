@@ -154,14 +154,51 @@ class NoRoute(Exception):
 
 
 def passable_mask(terrain: Terrain, max_grade: float) -> list[bool]:
-    """Trafficability for the whole pad, computed once.
+    """Can a truck STAND here: the local surface gradient, by central differences.
 
-    Computing it per A* edge visit was the dominant cost of a build: the search touches thousands of
-    cells, each gradient check itself walks eight neighbours, and two routes are solved per load. One
-    pass over the pad costs what a few hundred of those checks cost, and the surface does not change
-    during a single route solve.
+    NOT the steepest drop to any neighbour, and the difference is the whole behaviour of the model.
+    `Terrain.gradient` returns the worst drop in the 8-neighbourhood, which is the right measure for
+    an angle-of-repose check and the wrong one for trafficability: it makes every cell at the top of
+    a face and every cell at its foot impassable, because each has one steep neighbour. A pile at
+    repose therefore had its entire perimeter, its whole crest and the toe of every face marked as
+    ground no truck could occupy, so the working level was unreachable BY CONSTRUCTION. Measured: a
+    clean 8 m platform with a correctly graded 0.5 ramp cut into it came out with 30 of 1296 cells
+    reachable, and the ramp cells themselves read as impassable while their along-ramp gradient was
+    exactly at the limit, because the spoil beside them was not.
+
+    A central difference asks what a truck actually cares about: how the ground tilts underneath it.
+    Whether the NEXT cell can be driven to is a separate question, and it is asked separately, per
+    step, by the flood fill and the router.
+
+    Computing it once per pad rather than per A* edge visit is what keeps a build at tens of seconds
+    instead of hundreds.
     """
-    return [terrain.gradient(c) <= max_grade for c in range(terrain.n_cells)]
+    out = [True] * terrain.n_cells
+    nx, ny, cm = terrain.nx, terrain.ny, terrain.cell_m
+    z = terrain.z
+    for j in range(ny):
+        for i in range(nx):
+            c = j * nx + i
+            xa = z[j * nx + max(i - 1, 0)]
+            xb = z[j * nx + min(i + 1, nx - 1)]
+            ya = z[max(j - 1, 0) * nx + i]
+            yb = z[min(j + 1, ny - 1) * nx + i]
+            dx = (xb - xa) / (cm * (2.0 if 0 < i < nx - 1 else 1.0))
+            dy = (yb - ya) / (cm * (2.0 if 0 < j < ny - 1 else 1.0))
+            out[c] = math.hypot(dx, dy) <= max_grade
+    return out
+
+
+def step_ok(terrain: Terrain, a: int, b: int, max_grade: float) -> bool:
+    """Can a truck drive from cell ``a`` to adjacent cell ``b``.
+
+    The gradient of the STEP, which is what a machine climbs. A cell being at the lip of a face says
+    nothing about whether the move along the lip is drivable.
+    """
+    ai, aj = terrain.ij(a)
+    bi, bj = terrain.ij(b)
+    run = terrain.cell_m * (math.sqrt(2.0) if ai != bi and aj != bj else 1.0)
+    return abs(terrain.z[b] - terrain.z[a]) / run <= max_grade
 
 
 def reachable_mask(
@@ -193,9 +230,12 @@ def reachable_mask(
     while stack:
         c = stack.pop()
         for n in terrain.neighbours(c):
-            if out[n]:
+            if out[n] or not ok[n]:
                 continue
-            if ok[n]:
+            # BOTH TESTS, and they are different questions: can the truck stand there, and can it
+            # get there from here. A gentle shelf on the far side of a 6 m step is standable and
+            # unreachable, and only the per-step test says so.
+            if step_ok(terrain, c, n, max_grade):
                 out[n] = True
                 stack.append(n)
     # One ring of edge cells: standing at the lip of a face is exactly what an edge dump requires.
@@ -255,6 +295,11 @@ def solve_route(
         cx, cy = terrain.xy(c)
         for n in terrain.neighbours(c):
             if n != g and not ok[n]:
+                continue
+            # The step has to be climbable, not just the ground standable. Same rule as the flood
+            # fill, so "reachable" and "routable" cannot disagree and strand a load the mask
+            # promised was servable.
+            if n != g and not step_ok(terrain, c, n, max_grade):
                 continue
             nx_, ny_ = terrain.xy(n)
             step = math.hypot(nx_ - cx, ny_ - cy)

@@ -81,10 +81,11 @@ def test_levelled_floor_is_drivable():
     relax_to(t, REPOSE)
 
     max_grade = math.tan(math.radians(REPOSE)) / 1.5
-    inner = [
-        c for c in range(t.n_cells)
-        if area.contains(*t.xy(c)) and 10.0 < t.xy(c)[0] < 50.0 and 10.0 < t.xy(c)[1] < 50.0
-    ]
+    # The window is derived from the area, not written as literals. It used to be 10 to 50 metres,
+    # which was inside the area only while areas started at the pad origin; once they were offset by
+    # a margin the window sampled mostly bare pad and the assertion measured nothing.
+    core = area.inset(10.0)
+    inner = [c for c in range(t.n_cells) if core.contains(*t.xy(c))]
     drivable = sum(1 for c in inner if t.trafficable(c, max_grade))
     assert drivable / len(inner) > 0.9, (
         f"only {drivable}/{len(inner)} of the levelled floor is trafficable"
