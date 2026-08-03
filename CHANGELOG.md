@@ -4,6 +4,15 @@ All notable changes to `bedblend` are recorded here. The format follows Keep a C
 top, and the versions follow `X.XX.XXX` (the manifest carries the semver form with the padding
 dropped).
 
+## [0.03.002] - 2026-08-03
+
+### Added
+
+- `build(snapshot_every=N)` records the surface every N placed loads into `BuildResult.snapshots`,
+  so a consumer can animate the build instead of only inspecting the finished pile. A build that
+  ships one final state can show what was made but never how, and the how is the product: the base
+  layer going down, the dozer levelling it, the crest advancing.
+
 ## [0.03.001] - 2026-08-03
 
 ### Fixed
