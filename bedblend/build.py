@@ -124,6 +124,11 @@ class BuildResult:
     model: BlockModel
     loads: list[LoadRecord] = field(default_factory=list)
     dozer_passes: list[DozerPass] = field(default_factory=list)
+    # SURFACE SNAPSHOTS THROUGH THE BUILD, so the pile can be watched growing rather than only
+    # inspected once finished. Each entry is (loads placed so far, a copy of the surface). A build
+    # that ships only its final state can show what was made but never how, and the how is the
+    # product: the base layer going down, the dozer levelling it, the crest advancing.
+    snapshots: list[tuple[int, list[float]]] = field(default_factory=list)
 
     @property
     def placed(self) -> list[LoadRecord]:
@@ -162,6 +167,9 @@ def build(
     # is consumed in paddock dumps and no face is ever formed to cascade over, so none of the cascade
     # physics runs at all.
     paddock_frac: float = 0.18,
+    # How many placed loads between surface snapshots. Zero disables them. A snapshot is one float
+    # per cell, so a couple of dozen keeps the artifact small while still animating the build.
+    snapshot_every: int = 0,
     material: Material = DEFAULT_MATERIAL,
     route: Callable[[Payload], str] | None = None,
     verify_every: int = 0,
@@ -287,6 +295,10 @@ def build(
         if not rec.placed:
             continue
 
+        n_placed = len(result.placed)
+        if snapshot_every and n_placed % snapshot_every == 0:
+            result.snapshots.append((n_placed, list(terrain.z)))
+
         # The dozer cadence is PER AREA. With several areas in progress a single global counter would
         # doze whichever area happened to receive the hundredth load, which is not how a machine
         # assigned to a dump area behaves.
@@ -302,6 +314,9 @@ def build(
     # whatever the last load happened to leave.
     for area in plan.areas:
         result.dozer_passes.extend(_doze(terrain, model, area, crest_drop_m, repose_deg, fleet.max_grade))
+
+    if snapshot_every:
+        result.snapshots.append((len(result.placed), list(terrain.z)))
 
     model.assert_consistent(terrain)
     return result
