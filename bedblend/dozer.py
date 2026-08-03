@@ -122,6 +122,7 @@ def level(
     push_m: float = DEFAULT_PUSH_M,
     blade_m3: float = DEFAULT_BLADE_M3,
     tolerance_m: float = 0.05,
+    band_m: float | None = None,
 ) -> DozerPass:
     """Spread the heaps in ``area`` into a level working floor, conserving mass exactly.
 
@@ -137,10 +138,24 @@ def level(
     nearest-first rule matters for the ledger as much as for the geometry: a dozer shoves material a
     short distance, so provenance smears locally rather than teleporting across the pile, and the
     displacement statistic this returns reflects that.
+
+    ``band_m`` restricts the blade to cells within that distance of the current working level, which
+    is what a dozer working a bench actually does. It is available and NOT used by the default build.
+    It was tried, on the reasoning that levelling the whole footprint to its mean flattens the frustum
+    the plan is insetting lift by lift, and the measurement did not support it: the peak fell from
+    13.6 m to 12.0 and three reclaim invariants broke, because a pile with untouched flanks drains
+    differently than the campaign assumes. Left in, unused, with the result recorded, rather than
+    removed and rediscovered.
     """
     cells = _cells_of(terrain, area)
     if not cells:
         return DozerPass()
+
+    if band_m is not None:
+        top = max(terrain.z[c] for c in cells)
+        cells = [c for c in cells if terrain.z[c] >= top - band_m]
+        if not cells:
+            return DozerPass()
 
     if target_z is None:
         target_z = sum(terrain.z[c] for c in cells) / len(cells)
@@ -381,11 +396,16 @@ def build_ramp(
     if not ramp:
         return DozerPass()
 
-    # The top of the ramp is whatever the pile stands at where the corridor meets the working area.
+    # THE RAMP CLIMBS TO THE WORKING LEVEL. Where exactly is a trade measured rather than argued:
+    # the sixtieth percentile leaves the road at mid-height while the crest advances above it, and
+    # the ninetieth cuts so much of the pile into the road that the peak falls (measured 13.3 m to
+    # 11.1 m). Three quarters is where placement was best. It is deliberately not the highest cell,
+    # because one fresh dump should not redefine the road.
     inner = [c for c in cells if not area.on_ramp(*terrain.xy(c)) and terrain.has_material(c)]
     if not inner:
         return DozerPass()
-    top = sorted(terrain.z[c] for c in inner)[int(len(inner) * 0.6)]
+    ordered = sorted(terrain.z[c] for c in inner)
+    top = ordered[min(int(len(ordered) * 0.75), len(ordered) - 1)]
 
     area_m2 = terrain.cell_m * terrain.cell_m
     transfers: list[tuple[int, int, float]] = []

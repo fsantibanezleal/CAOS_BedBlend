@@ -246,6 +246,7 @@ def build(
     cursors: dict[str, int] = {name: 0 for name in queues}
     dozer_counts: dict[str, int] = {name: 0 for name in queues}
     last_doze: dict[str, int] = {name: -999 for name in queues}
+    full_counts: dict[str, int] = {name: 0 for name in queues}
     order = [a.name for a in plan.areas]
 
     for payload in payloads:
@@ -331,10 +332,25 @@ def build(
         # The dozer cadence is PER AREA. With several areas in progress a single global counter would
         # doze whichever area happened to receive the hundredth load, which is not how a machine
         # assigned to a dump area behaves.
+        # THE CADENCE IS SPLIT, because the two kinds of blade work have very different costs and
+        # very different urgency. Keeping the floor drivable and the road open is what decides
+        # whether the NEXT load can be placed at all, and a field of fresh heaps stops being
+        # crossable within a few loads; furnishing the tip head with a crest push and a safety berm
+        # is periodic housekeeping. Running them together on one slow cadence meant access was
+        # restored once every hundred loads and the ninety-nine in between were refused. Running
+        # them together on a fast cadence meant the berm went up every twelve loads and ringed the
+        # area. So: access often, furniture rarely.
         dozer_counts[name] += 1
+        full_counts[name] += 1
         if dozer_counts[name] >= plan.loads_per_dozer_pass:
             dozer_counts[name] = 0
-            result.dozer_passes.extend(_doze(terrain, model, area, crest_drop_m, repose_deg, fleet.max_grade))
+            full = full_counts[name] >= plan.loads_per_full_pass
+            if full:
+                full_counts[name] = 0
+            result.dozer_passes.extend(
+                _doze(terrain, model, area, crest_drop_m, repose_deg, fleet.max_grade,
+                      access_only=not full)
+            )
 
         if verify_every and seq % verify_every == 0:
             model.assert_consistent(terrain)

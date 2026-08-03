@@ -139,6 +139,31 @@ class Area:
     def contains(self, x_m: float, y_m: float) -> bool:
         return self.x0_m <= x_m <= self.x1_m and self.y0_m <= y_m <= self.y1_m
 
+    def inset(self, d_m: float) -> Area:
+        """The same area shrunk by ``d_m`` on every side, keeping its access and ramp.
+
+        THIS IS WHAT MAKES A BENCH A BENCH. Every lift sits inside the one below it by the horizontal
+        run of the face, so the sides of the finished solid stand at the angle of repose. Filling
+        every lift over the FULL footprint instead builds a slab with vertical sides that the
+        material immediately slumps off: measured on a 90 m square designed to 26 m, the volume came
+        out right and the peak was 14.6 m, because the loads were spread over 8100 square metres at
+        every level instead of climbing a shrinking one.
+
+        It clamps rather than inverting, so a caller can ask for more inset than the area has and get
+        a degenerate area back to stop on.
+        """
+        cx, cy = self.centre
+        hw = max((self.x1_m - self.x0_m) / 2.0 - d_m, 0.0)
+        hl = max((self.y1_m - self.y0_m) / 2.0 - d_m, 0.0)
+        return Area(
+            name=self.name,
+            x0_m=cx - hw, y0_m=cy - hl, x1_m=cx + hw, y1_m=cy + hl,
+            material_class=self.material_class,
+            access_xy=self.access_xy or self.access,
+            ramp_width_m=self.ramp_width_m,
+            benches=self.benches,
+        )
+
     @property
     def access(self) -> tuple[float, float]:
         # THE DEFAULT IS THE MIDDLE OF THE +Y EDGE, not a corner. `rectangular_yard` lays areas out
@@ -199,7 +224,19 @@ class DumpPlan:
     row_spacing_m: float = 25.0
     tip_spacing_m: float = 3.0
     # Loads placed before the dozer is called. Default is two full rows at the default lattice.
-    loads_per_dozer_pass: int = 40
+    # Loads between ACCESS passes: grade the ramp, level the floor. Cheap, and it is what decides
+    # whether the next truck can get in at all.
+    loads_per_dozer_pass: int = 12
+    # Loads between FULL passes, which add the crest push and the safety berm on top of an access
+    # pass. A berm is by construction a wall, so it is furniture rather than access.
+    loads_per_full_pass: int = 60
+    # How much a lift raises the working level. A dump is of the order of a metre thick and the dozer
+    # spreads it, so a lift is a metre and a half. It is what decides how far each lift is inset from
+    # the one below, and therefore the slope of the finished sides.
+    lift_thickness_m: float = 1.5
+    # The angle those sides stand at. The plan needs it to inset the lifts; the engine imposes it
+    # independently through the relaxation, and the two agreeing is the point.
+    repose_deg: float = 37.0
     # How far the edge campaign advances its crest per sweep, as a fraction of the load's run-out.
     sweep_advance_frac: float = 0.6
     # Where the upper layer is seeded, as a fraction across the area. The measured pattern seeds near
@@ -369,8 +406,7 @@ class DumpPlan:
         total_loads = max(1, round(bench.designed_volume_m3 / load_volume_m3))
         n_paddock_target = round(total_loads * paddock_frac)
 
-        # The base layer. Its lattice is a geometric fact of the area, so it is repeated until the
-        # paddock share of the volume is down, which is what a floor several dumps deep means.
+        # The base layer, on the FULL footprint. It is the floor everything else is built on.
         paddock: list[TipPosition] = []
         while len(paddock) < n_paddock_target:
             batch = self.paddock_tips(area, bench, start_seq=len(paddock))
@@ -378,11 +414,33 @@ class DumpPlan:
                 break
             paddock.extend(batch[: n_paddock_target - len(paddock)])
 
+        # THE LIFTS CLIMB A SHRINKING FOOTPRINT. Each one sits inside the one below by the horizontal
+        # run of a face at repose, which is what gives the finished solid its sides and what turns
+        # the designed frustum volume into an actual frustum instead of a slab of the same volume.
+        run_per_lift = self.lift_thickness_m / math.tan(math.radians(self.repose_deg))
         out: list[TipPosition] = list(paddock)
         lift = 0
         while len(out) < total_loads:
+            face = area.inset(lift * run_per_lift)
+            if face.width_m < 2.0 * self.tip_spacing_m or face.length_m < 2.0 * self.tip_spacing_m:
+                break
+            # THE SWEEP CARRIES WHAT ITS OWN FOOTPRINT HOLDS AT ONE LIFT THICKNESS, and no more.
+            # Letting the sweep run until the ring lattice was exhausted made every lift as thick as
+            # its coverage allowed, which on the full footprint is nearly three metres against an
+            # inset sized for one and a half. The first two or three lifts then consumed the whole
+            # load budget on the widest part of the solid and the pile never climbed: same volume,
+            # same 14.6 m peak, whether the lifts were inset or not.
+            n_lift = max(1, round(face.plan_area_m2 * self.lift_thickness_m / load_volume_m3))
+            # THE SWEEP SPACING IS THE LIFT'S RUN-OUT, NOT THE BENCH'S. A sweep advances by a
+            # fraction of the run-out, and passing the whole bench face here spaced the rings twenty
+            # metres apart on a lift a metre and a half thick. Each lift then produced a third of the
+            # tips its own footprint holds, the programme ran out at 551 tips against a designed 766,
+            # and the shortfall came back as "this area is built out" while nothing had been refused
+            # for access at all. The material still cascades down whatever face the TERRAIN presents;
+            # this is the lattice, not the physics.
+            lift_run_out = self.lift_thickness_m / math.tan(math.radians(self.repose_deg))
             sweep = self.edge_tips(
-                area, bench, n_tips=total_loads - len(out), run_out_m=run_out_m,
+                face, bench, n_tips=min(total_loads - len(out), n_lift), run_out_m=lift_run_out,
                 start_seq=len(out), lift=lift,
             )
             if not sweep:
@@ -414,6 +472,20 @@ class DumpPlan:
         return out
 
 
+def _frustum_m3(w: float, l: float, h: float, repose_deg: float) -> float:
+    """Volume of a rectangular frustum of height ``h`` on a ``w`` by ``l`` base at repose.
+
+    Prismatoid rule. The top face is inset by ``h / tan(repose)`` on every side and clamps at zero,
+    which turns the frustum into a pyramid once the height is enough to close it.
+    """
+    inset = h / math.tan(math.radians(repose_deg))
+    wt = max(w - 2.0 * inset, 0.0)
+    lt = max(l - 2.0 * inset, 0.0)
+    mid_w = (w + wt) / 2.0
+    mid_l = (l + lt) / 2.0
+    return (h / 6.0) * (w * l + 4.0 * mid_w * mid_l + wt * lt)
+
+
 def rectangular_yard(
     *,
     n_areas: int,
@@ -423,16 +495,22 @@ def rectangular_yard(
     n_benches: int,
     gap_m: float = 20.0,
     classes: list[str] | None = None,
-    swell_utilisation: float = 0.55,
+    repose_deg: float = 37.0,
     ramp_width_m: float = 25.0,
+    margin_m: float = 30.0,
 ) -> DumpPlan:
     """A stockyard of ``n_areas`` rectangular areas side by side, each with a bench schedule.
 
-    ``swell_utilisation`` converts the prismatic volume of a bench into the volume it can actually
-    hold. A bench is not a box: its sides stand at the angle of repose, so the solid is a frustum and
-    holds well under ``width * length * height``. The default is a blunt but honest constant, and the
-    reason it is a parameter is that the true figure depends on the repose angle and the bench aspect
-    ratio, which the design layer deliberately does not know about.
+    A BENCH IS NOT A BOX and its designed volume is not a fudged fraction of one. Its sides stand at
+    the angle of repose, so the solid is a rectangular frustum and its volume follows from the
+    footprint, the height and the repose angle by the prismatoid rule. That is computed here rather
+    than approximated by a constant, because the constant was wrong in the direction that matters:
+    a blunt 0.55 asked a 60 m square to hold 51,500 cubic metres of a shape whose geometric capacity
+    at repose is 27,100, so the plan kept issuing tips for material the pile could not hold, the
+    surplus spread past the area boundary, and the refusal rate stopped meaning anything.
+
+    Where the height is enough to close the frustum to a point the solid is a pyramid, and the
+    formula degrades to that on its own.
 
     The default geometry is close to the published example: 150 m by 57 m areas with an 8.7 m bench
     approximate the wet-season stockpiles in CCG 2006, and the 150 m by 150 m by 5 m heaped fill of
@@ -442,22 +520,27 @@ def rectangular_yard(
     if len(labels) < n_areas:
         raise ValueError(f"{n_areas} areas requested but only {len(labels)} class labels given")
 
+    # THE AREAS ARE OFFSET FROM THE PAD ORIGIN. They used to sit flush against it, so a dump on the
+    # south or west edge cascaded straight off the grid and the load was refused for having nowhere
+    # to land: measured 221 of 766 planned tips on the reference scenario, which is a fifth of the
+    # campaign lost to the edge of an array. A dump area has ground around it in every direction,
+    # because that is where the run-out goes and where the haul road runs.
     areas: list[Area] = []
     for k in range(n_areas):
-        x0 = k * (area_width_m + gap_m)
+        x0 = margin_m + k * (area_width_m + gap_m)
         a = Area(
             name=labels[k],
             x0_m=x0,
-            y0_m=0.0,
+            y0_m=margin_m,
             x1_m=x0 + area_width_m,
-            y1_m=area_length_m,
+            y1_m=margin_m + area_length_m,
             material_class=labels[k],
             ramp_width_m=ramp_width_m,
         )
-        per_bench = a.plan_area_m2 * bench_height_m * swell_utilisation
+        per_bench = _frustum_m3(area_width_m, area_length_m, bench_height_m, repose_deg)
         a.benches = [
             Bench(index=b, top_m=(b + 1) * bench_height_m, designed_volume_m3=per_bench)
             for b in range(n_benches)
         ]
         areas.append(a)
-    return DumpPlan(areas=areas)
+    return DumpPlan(areas=areas, repose_deg=repose_deg)

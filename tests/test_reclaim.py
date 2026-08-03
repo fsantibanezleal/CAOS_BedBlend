@@ -20,9 +20,12 @@ CELL = 2.5
 
 def _stocked(n_loads: int = 160):
     """A base layer with grades that rise along the build, so order of extraction matters."""
-    t = Terrain.flat(60, 60, CELL)
+    # The pad has to hold the area PLUS its margin: `rectangular_yard` offsets areas from the origin
+    # so a dump on the near edge has ground to cascade onto instead of running off the array.
+    t = Terrain.flat(48, 48, CELL)
     plan = rectangular_yard(
-        n_areas=1, area_width_m=60.0, area_length_m=60.0, bench_height_m=6.0, n_benches=1
+        n_areas=1, area_width_m=60.0, area_length_m=60.0, bench_height_m=6.0, n_benches=1,
+        margin_m=30.0,
     )
     plan.row_spacing_m = 8.0
     area = plan.areas[0]
@@ -49,8 +52,9 @@ def _stocked(n_loads: int = 160):
 
 
 def _face(**kw) -> ReclaimFace:
+    # The face starts at the area's near edge, which is the margin, not the pad origin.
     base = {
-        "method": ReclaimMethod.FULL_HEIGHT, "position_m": 0.0, "direction": (1.0, 0.0),
+        "method": ReclaimMethod.FULL_HEIGHT, "position_m": 30.0, "direction": (1.0, 0.0),
         "depth_m": 10.0, "width_m": 200.0, "max_face_m": 15.0,
     }
     base.update(kw)
