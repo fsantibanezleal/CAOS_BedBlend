@@ -355,8 +355,25 @@ def settle(
         terrain.z, terrain.nx, terrain.ny, terrain.cell_m, repose_deg, active=seed,
         floor=terrain.z0,
     )
+
+    # A SEEDED CASCADE CAN STILL MISS A PAIR ON SLOPING GROUND, and it is worth saying why rather
+    # than widening the tolerance. With a floor, a cell's transfer can be cut short by the ground
+    # beneath it, and the cell it would have fed is then left marginally over the angle without ever
+    # having been queued. Measured on a valley fill: 4 pairs at 38.2 degrees against an imposed 37.
+    # Correctness wins over speed here, so if anything is left standing the whole pad is swept once.
+    # The check is O(cells) and the sweep only ever runs when it is needed.
+    n_over, _ = count_over_repose(
+        terrain.z, terrain.nx, terrain.ny, terrain.cell_m, repose_deg, floor=terrain.z0
+    )
+    third: list[tuple[int, int, float]] = []
+    if n_over:
+        third = cascade(
+            terrain.z, terrain.nx, terrain.ny, terrain.cell_m, repose_deg, active=None,
+            floor=terrain.z0,
+        )
+
     assert_stable(terrain, repose_deg)
-    return first + second
+    return first + second + third
 
 
 def assert_stable(terrain: Terrain, repose_deg: float) -> None:
