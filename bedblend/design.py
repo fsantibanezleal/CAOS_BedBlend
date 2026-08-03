@@ -141,17 +141,25 @@ class Area:
 
     @property
     def access(self) -> tuple[float, float]:
-        return self.access_xy if self.access_xy is not None else (self.x0_m, self.y0_m)
+        # THE DEFAULT IS THE MIDDLE OF THE +Y EDGE, not a corner. `rectangular_yard` lays areas out
+        # along +x from the origin, so the (x0, y0) corner it used to default to is the one buried
+        # deepest in the layout: for a single 90 m area on a 140 m pad it sat in the pad corner with
+        # the area itself between it and every approach, and no truck could reach the entrance at
+        # all. An edge midpoint on the open side is where a haul road actually meets a dump.
+        return self.access_xy if self.access_xy is not None else ((self.x0_m + self.x1_m) / 2.0, self.y1_m)
 
     def on_ramp(self, x_m: float, y_m: float) -> bool:
         """Is this point inside the reserved access corridor.
 
         The corridor is the strip of the area within half a ramp width of the straight line from the
-        access point to the area's centre. Nothing is tipped on it, so there is always a way in.
+        access point ACROSS the area, not merely to its centre. The run available is what limits the
+        lift a ramp can serve: at a working gradient of about 0.43 a corridor half the area long tops
+        out around 19 m, and a bench schedule that designs past that produces a working level nothing
+        can climb to. The full span roughly doubles it.
         """
         ax, ay = self.access
-        cx, cy = self.centre
-        vx, vy = cx - ax, cy - ay
+        fx, fy = self.ramp_far
+        vx, vy = fx - ax, fy - ay
         span = math.hypot(vx, vy)
         if span < 1e-9:
             return False
@@ -161,6 +169,13 @@ class Area:
         if along < 0.0 or along > span:
             return False
         return abs(-dy * vx + dx * vy) <= self.ramp_width_m / 2.0
+
+    @property
+    def ramp_far(self) -> tuple[float, float]:
+        """The inner end of the access corridor: the access point reflected through the centre."""
+        cx, cy = self.centre
+        ax, ay = self.access
+        return (2.0 * cx - ax, 2.0 * cy - ay)
 
     def distance_from_access(self, x_m: float, y_m: float) -> float:
         ax, ay = self.access
@@ -184,7 +199,7 @@ class DumpPlan:
     row_spacing_m: float = 25.0
     tip_spacing_m: float = 3.0
     # Loads placed before the dozer is called. Default is two full rows at the default lattice.
-    loads_per_dozer_pass: int = 100
+    loads_per_dozer_pass: int = 40
     # How far the edge campaign advances its crest per sweep, as a fraction of the load's run-out.
     sweep_advance_frac: float = 0.6
     # Where the upper layer is seeded, as a fraction across the area. The measured pattern seeds near
@@ -222,8 +237,9 @@ class DumpPlan:
             xs: list[float] = []
             x = area.x0_m + self.tip_spacing_m / 2.0
             while x <= area.x1_m:
-                if not area.on_ramp(x, y):     # keep the access corridor clear
-                    xs.append(x)
+                # THE WHOLE AREA IS FILLED, INCLUDING THE ACCESS CORRIDOR. See `build_ramp`: the ramp
+                # is a cut maintained in the fill, not a void reserved in it.
+                xs.append(x)
                 x += self.tip_spacing_m
             if xs:
                 rows.append([(xx, y) for xx in xs])
@@ -256,8 +272,9 @@ class DumpPlan:
         n_tips: int,
         run_out_m: float,
         start_seq: int = 0,
+        lift: int = 0,
     ) -> list[TipPosition]:
-        """The upper layer: a seed cluster, then radial sweeps outward from it.
+        """ONE LIFT of the upper layer: a seed cluster, then radial sweeps outward from it.
 
         The measured pattern is "radial progression from an initial cluster point" with the material
         added in "sweeping radial movements", and the resulting plot is a set of nested arcs rather
@@ -268,6 +285,11 @@ class DumpPlan:
         ``heading_rad`` here is provisional. It is set radially outward from the seed, which is the
         right answer while the face is a growing disc, but the execution step resolves it against the
         live crest normal because that is what the measurement actually specifies.
+
+        ONE CALL IS ONE LIFT, not the whole bench. When the sweeps reach the far corner the area has
+        been covered once and the working level has risen by about the thickness of a dump; the next
+        lift starts again from the seed. ``lift`` rotates the ring phase so successive lifts do not
+        drop every load on the seam left by the one below.
         """
         # SEED OPPOSITE THE ACCESS. The upper layer starts as a cluster and then sweeps outward, so
         # seeding it beside the entry point buries the entry point first and walls the machine out of
@@ -311,9 +333,9 @@ class DumpPlan:
             for k in range(n_on_ring):
                 if len(tips) >= n_tips:
                     break
-                a = 2.0 * math.pi * k / n_on_ring
+                a = 2.0 * math.pi * (k + 0.5 * (lift % 2)) / n_on_ring
                 x, y = sx + r * math.cos(a), sy + r * math.sin(a)
-                if not area.contains(x, y) or area.on_ramp(x, y):
+                if not area.contains(x, y):
                     continue
                 tips.append(TipPosition(x, y, a, Phase.EDGE, area.name, bench.index, seq))
                 seq += 1
@@ -335,20 +357,39 @@ class DumpPlan:
         upper layer starts. The source describes the base layer as "a series of paddock dumps" without
         quantifying it, so this is an exposed parameter with a stated default rather than a number
         presented as measured.
+
+        A BENCH IS FILLED IN LIFTS, not in one layer, and that is the whole correction here. A dump is
+        of the order of a metre thick and a bench is tens of metres tall, so covering the area once
+        gets nowhere near the designed volume. The first version emitted exactly one paddock lattice
+        and one set of sweeps and then declared the programme complete: on the reference scenario that
+        was 332 tips against a design of 1360, so 228 of 560 offered loads were refused with "this
+        area is built out" while the pile stood at 10.8 m of a designed 36. The area is covered
+        repeatedly, each pass laid on top of the last, until the designed volume is met.
         """
         total_loads = max(1, round(bench.designed_volume_m3 / load_volume_m3))
         n_paddock_target = round(total_loads * paddock_frac)
 
-        paddock = self.paddock_tips(area, bench)
-        # The lattice is a geometric fact of the area; the volume target decides how much of it is
-        # used. Truncating is right, cycling it would place two loads on one spot.
-        paddock = paddock[:n_paddock_target]
+        # The base layer. Its lattice is a geometric fact of the area, so it is repeated until the
+        # paddock share of the volume is down, which is what a floor several dumps deep means.
+        paddock: list[TipPosition] = []
+        while len(paddock) < n_paddock_target:
+            batch = self.paddock_tips(area, bench, start_seq=len(paddock))
+            if not batch:
+                break
+            paddock.extend(batch[: n_paddock_target - len(paddock)])
 
-        n_edge = total_loads - len(paddock)
-        edge = self.edge_tips(
-            area, bench, n_tips=max(n_edge, 0), run_out_m=run_out_m, start_seq=len(paddock)
-        )
-        return paddock + edge
+        out: list[TipPosition] = list(paddock)
+        lift = 0
+        while len(out) < total_loads:
+            sweep = self.edge_tips(
+                area, bench, n_tips=total_loads - len(out), run_out_m=run_out_m,
+                start_seq=len(out), lift=lift,
+            )
+            if not sweep:
+                break
+            out.extend(sweep)
+            lift += 1
+        return out
 
     def program(
         self, *, load_volume_m3: float, run_out_m: float, paddock_frac: float = 0.35
@@ -383,6 +424,7 @@ def rectangular_yard(
     gap_m: float = 20.0,
     classes: list[str] | None = None,
     swell_utilisation: float = 0.55,
+    ramp_width_m: float = 25.0,
 ) -> DumpPlan:
     """A stockyard of ``n_areas`` rectangular areas side by side, each with a bench schedule.
 
@@ -410,6 +452,7 @@ def rectangular_yard(
             x1_m=x0 + area_width_m,
             y1_m=area_length_m,
             material_class=labels[k],
+            ramp_width_m=ramp_width_m,
         )
         per_bench = a.plan_area_m2 * bench_height_m * swell_utilisation
         a.benches = [
