@@ -25,6 +25,7 @@ from enum import Enum
 from .blocks import BlockModel, Parcel, transfer_distances
 from .relax import relax_to
 from .terrain import Terrain
+from .truck import NoRoute, passable_mask, reachable_mask, solve_route
 
 
 class ReclaimMethod(str, Enum):
@@ -59,6 +60,19 @@ class Cut:
     displacement_m: float = 0.0
     grade_uncertainty: float = 0.0
     cells: list[int] = field(default_factory=list)
+    # THE HAUL CYCLE THAT TAKES IT AWAY. A cut used to be a tonnage, a grade and a set of cells, and
+    # the material simply ceased to exist at the face: nothing came for it. That is not a rendering
+    # gap, it is a missing half of the operation. Reclaimed ore leaves a stockpile the same way it
+    # arrived, in a truck, over ground the truck can climb, and the mirror of the build side is the
+    # honest model: an EMPTY truck routes in, is loaded at the face, and routes out LOADED.
+    #
+    # `stand` is where the truck waits to be loaded, which is a trafficable cell beside the face
+    # rather than the face itself: a loader digs the face, a truck cannot stand on it.
+    stand: tuple[float, float] | None = None
+    approach: list[tuple[float, float]] = field(default_factory=list)
+    departure: list[tuple[float, float]] = field(default_factory=list)
+    # Where the loader itself sits: on the cut, which is what the centroid of the engaged cells is.
+    loader: tuple[float, float] | None = None
 
 
 @dataclass
@@ -290,6 +304,89 @@ def advance(face: ReclaimFace, terrain: Terrain) -> bool:
     return face.position_m <= _along(terrain, face.direction)
 
 
+
+# ---------------------------------------------------------------------------------------------
+# THE HAUL CYCLE THAT TAKES THE MATERIAL AWAY
+# ---------------------------------------------------------------------------------------------
+# A reclaim campaign used to remove material from a face and report a tonnage. Nothing came for it,
+# nothing carried it, and on screen the pile simply lost volume with no machine in sight. Felipe put
+# it exactly: "how it reclaim if no orange truck is coming to the site?"
+#
+# The build side already answers the same question properly, and this is its mirror. The primitives
+# are the ones `build.py` uses, deliberately, so that "a truck can get there" means the same thing in
+# both directions and a reclaim truck cannot drive somewhere a haul truck could not.
+#
+# THE TRUCK DOES NOT STAND ON THE FACE. A loader digs the face; the truck stands beside it on ground
+# it can climb and is loaded over the side. So the spot is the nearest REACHABLE cell to the cut
+# centroid, which is exactly the constraint that makes the model honest: if the campaign has cut
+# itself into a hole no truck can reach, the cut is refused rather than teleported out.
+
+
+def _centroid(terrain: Terrain, cells: list[int]) -> tuple[float, float]:
+    """Where the loader sits: the middle of the cells this cut engaged, in pad metres."""
+    if not cells:
+        return 0.0, 0.0
+    xs = 0.0
+    ys = 0.0
+    for c in cells:
+        x, y = terrain.xy(c)
+        xs += x
+        ys += y
+    return xs / len(cells), ys / len(cells)
+
+
+def haul_cycle(
+    terrain: Terrain,
+    cells: list[int],
+    *,
+    exit_xy: tuple[float, float],
+    max_grade: float,
+) -> tuple[tuple[float, float] | None, list[tuple[float, float]], list[tuple[float, float]],
+           tuple[float, float] | None]:
+    """Route an empty truck in to the cut and a loaded one back out.
+
+    Returns ``(stand, approach, departure, loader)`` in pad metres. ``stand`` is None when nothing
+    drivable is within reach of the cut, which is a real refusal and is reported rather than hidden:
+    a campaign that has undercut its own access cannot be served, and saying so is the point of
+    modelling the haulage at all.
+
+    The approach and the departure are solved SEPARATELY rather than one reversed, because the
+    surface changes between them: the cut has just been taken and the face relaxed, so the way out is
+    not always the way in.
+    """
+    loader = _centroid(terrain, cells)
+    passable = passable_mask(terrain, max_grade)
+    reach = reachable_mask(terrain, exit_xy, max_grade, passable=passable)
+
+    # The nearest cell to the loader that a truck can actually stand on AND get to.
+    best: int | None = None
+    best_d = float("inf")
+    for c in range(terrain.n_cells):
+        if not (passable[c] and reach[c]):
+            continue
+        x, y = terrain.xy(c)
+        d = (x - loader[0]) ** 2 + (y - loader[1]) ** 2
+        if d < best_d:
+            best_d = d
+            best = c
+    if best is None:
+        return None, [], [], loader
+
+    stand = terrain.xy(best)
+    try:
+        approach = solve_route(
+            terrain, exit_xy, stand, max_grade=max_grade, passable=passable
+        ).points
+    except NoRoute:
+        return None, [], [], loader
+    try:
+        departure = solve_route(
+            terrain, stand, exit_xy, max_grade=max_grade, passable=passable
+        ).points
+    except NoRoute:
+        departure = list(reversed(approach))
+    return stand, approach, departure, loader
+
 def campaign(
     terrain: Terrain,
     model: BlockModel,
@@ -298,13 +395,23 @@ def campaign(
     cut_tonnes: float,
     n_cuts: int,
     repose_deg: float,
+    exit_xy: tuple[float, float] | None = None,
+    max_grade: float | None = None,
 ) -> list[Cut]:
     """Run a reclaim campaign, advancing the face when the current position is worked out.
 
     The returned series IS the plant feed, and its variance against the variance of the incoming
     stream is what the whole product is measuring.
+
+    WITH ``exit_xy`` AND ``max_grade``, EVERY CUT ALSO CARRIES ITS HAUL CYCLE: an empty truck routed
+    in from the exit to a spot beside the face, and a loaded one routed back out. Without them the
+    material still leaves the ledger correctly and the feed series is unchanged, but nothing is
+    recorded about how it got off site, which is how this engine shipped a reclaim campaign that no
+    machine ever attended. They are optional only so that an existing caller does not break; the
+    product passes both.
     """
     out: list[Cut] = []
+    haul = exit_xy is not None and max_grade is not None
     for _ in range(n_cuts):
         c = cut(terrain, model, face, cut_tonnes, repose_deg=repose_deg)
         if c.tonnes <= 0:
@@ -313,5 +420,12 @@ def campaign(
             c = cut(terrain, model, face, cut_tonnes, repose_deg=repose_deg)
             if c.tonnes <= 0:
                 break
+        if haul:
+            # Routed AFTER the cut, on the surface the cut left behind, because that is the ground
+            # the truck actually drives on: the face has just moved and the material has relaxed.
+            stand, approach, departure, loader = haul_cycle(
+                terrain, c.cells, exit_xy=exit_xy, max_grade=max_grade
+            )
+            c.stand, c.approach, c.departure, c.loader = stand, approach, departure, loader
         out.append(c)
     return out
