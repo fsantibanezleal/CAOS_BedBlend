@@ -4,6 +4,40 @@ All notable changes to `bedblend` are recorded here. The format follows Keep a C
 top, and the versions follow `X.XX.XXX` (the manifest carries the semver form with the padding
 dropped).
 
+## [0.06.000] - 2026-08-04
+
+### Added
+
+- **`campaign(..., exit_xy=, max_grade=)`: the haul cycle that takes the reclaimed material away.**
+  A cut used to be a tonnage, a grade and a set of cells, and the material simply ceased to exist at
+  the face. Nothing came for it, nothing carried it, and a consumer drawing the campaign saw the pile
+  lose volume with no machine anywhere. That is not a rendering gap, it is a missing half of the
+  operation: ore leaves a stockpile the way it arrived, in a truck, over ground the truck can climb.
+
+  Every cut now records `stand`, `approach`, `departure` and `loader`. An EMPTY truck routes in from
+  the exit to a spot beside the face, and a LOADED one routes back out. The primitives are the ones
+  `build.py` already uses, deliberately, so "a truck can get there" means the same thing in both
+  directions and a reclaim truck cannot drive somewhere a haul truck could not.
+
+  **The truck does not stand on the face.** A loader digs the face; the truck stands beside it on
+  ground it can climb, which is why the loader position and the truck position are separate fields.
+  The spot is the nearest cell that is both passable and reachable from the exit, so a campaign that
+  has undercut its own access reports `stand=None` rather than teleporting the material out. That
+  refusal is the point of modelling the haulage at all.
+
+  The two legs are solved separately rather than one reversed, because the surface changes between
+  them: the cut has just been taken and the face relaxed, so the way out is not always the way in.
+
+  **Additive.** Without the two arguments the tonnages, grades and provenance are byte-identical, so
+  an existing consumer is unaffected; a test asserts exactly that.
+
+### Tests
+
+- Four covering the haulage: that a cut records the truck that came for it, that the truck stands on
+  drivable ground rather than on the face, that every step of both legs passes the same per-step
+  gradient rule the build side uses, and that omitting the haulage changes no tonnage and no grade.
+  116 tests, ruff clean.
+
 ## [0.05.002] - 2026-08-04
 
 ### Added

@@ -5,6 +5,9 @@ undercuts, and the machine must engage a face rather than an integer position.
 """
 from __future__ import annotations
 
+import itertools
+import math
+
 import pytest
 
 from bedblend.blocks import BlockModel, transfer_distances
@@ -16,6 +19,9 @@ from bedblend.terrain import Terrain, TruckSpec
 
 REPOSE = 37.0
 CELL = 2.5
+# The gradient a laden haul truck climbs: two thirds of the repose angle, the same limit the build
+# side uses, so a reclaim truck cannot drive anywhere a haul truck could not.
+MAX_GRADE = math.tan(math.radians(REPOSE)) / 1.5
 
 
 def _stocked(n_loads: int = 160):
@@ -164,3 +170,92 @@ def test_an_empty_pile_yields_nothing_rather_than_inventing_material():
     c = cut(t, model, _face(), 1000.0, repose_deg=REPOSE)
     assert isinstance(c, Cut)
     assert c.tonnes == 0.0
+
+
+# ------------------------------------------------------------------------------------------------
+# THE HAUL CYCLE. Reclaim used to remove material at a face and report a tonnage, with nothing coming
+# for it: no truck, no route, no way off site. The pile lost volume and no machine was ever there.
+# ------------------------------------------------------------------------------------------------
+
+
+def _exit_of(t: Terrain) -> tuple[float, float]:
+    """A point off the near edge of the pad, which is where the road meets the site."""
+    return t.nx * t.cell_m / 2.0, 2.0
+
+
+def test_a_cut_records_the_truck_that_came_for_it():
+    t, _area, model = _stocked()
+    cuts = campaign(
+        t, model, _face(depth_m=10.0), cut_tonnes=1500.0, n_cuts=8, repose_deg=REPOSE,
+        exit_xy=_exit_of(t), max_grade=MAX_GRADE,
+    )
+    served = [c for c in cuts if c.stand is not None]
+    assert served, "not one cut had a truck routed to it"
+
+    for c in served:
+        # It came from the road and it went back to the road. The ends are cell CENTRES, because a
+        # route is a walk over cells, so they sit within one cell of the point asked for.
+        assert len(c.approach) >= 2
+        assert len(c.departure) >= 2
+        near = CELL * 1.5
+        assert math.dist(c.approach[0], _exit_of(t)) <= near
+        assert math.dist(c.approach[-1], c.stand) <= near
+        assert math.dist(c.departure[0], c.stand) <= near
+        assert math.dist(c.departure[-1], _exit_of(t)) <= near
+        # The loader is ON the cut; the truck stands somewhere it can actually be.
+        assert c.loader is not None
+        # And the truck is not parked on top of the loader: it stands beside the face.
+        assert math.dist(c.stand, c.loader) > 0.0
+
+
+def test_the_truck_stands_on_drivable_ground_not_on_the_face():
+    """A loader digs the face. A truck cannot stand on a face, and this is the whole reason the two
+    positions are recorded separately."""
+    from bedblend.truck import passable_mask
+
+    t, _area, model = _stocked()
+    cuts = campaign(
+        t, model, _face(depth_m=10.0), cut_tonnes=1500.0, n_cuts=8, repose_deg=REPOSE,
+        exit_xy=_exit_of(t), max_grade=MAX_GRADE,
+    )
+    mask = passable_mask(t, MAX_GRADE)
+    for c in (x for x in cuts if x.stand is not None):
+        cell = t.cell_at(*c.stand)
+        assert mask[cell], "the truck was parked on ground it could not stand on"
+
+
+def test_the_route_is_drivable_end_to_end():
+    """Every step of both legs obeys the same per-step gradient rule the build side uses, so a
+    reclaim truck cannot drive somewhere a haul truck could not."""
+    from bedblend.truck import step_ok
+
+    t, _area, model = _stocked()
+    cuts = campaign(
+        t, model, _face(depth_m=10.0), cut_tonnes=1500.0, n_cuts=6, repose_deg=REPOSE,
+        exit_xy=_exit_of(t), max_grade=MAX_GRADE,
+    )
+    for c in (x for x in cuts if x.stand is not None):
+        for leg in (c.approach, c.departure):
+            for a, b in itertools.pairwise(leg):
+                ca, cb = t.cell_at(*a), t.cell_at(*b)
+                if ca == cb:
+                    continue
+                assert step_ok(t, ca, cb, MAX_GRADE), (
+                    f"a leg steps from {a} to {b}, which no truck could climb"
+                )
+
+
+def test_without_an_exit_the_campaign_still_delivers_but_records_no_haulage():
+    """The haulage is additive: omitting it changes no tonnage and no grade, which is what makes it
+    safe to add to an engine other products already consume."""
+    t1, _a1, m1 = _stocked()
+    t2, _a2, m2 = _stocked()
+    plain = campaign(t1, m1, _face(depth_m=10.0), cut_tonnes=1500.0, n_cuts=6, repose_deg=REPOSE)
+    hauled = campaign(
+        t2, m2, _face(depth_m=10.0), cut_tonnes=1500.0, n_cuts=6, repose_deg=REPOSE,
+        exit_xy=_exit_of(t2), max_grade=MAX_GRADE,
+    )
+    assert [round(c.tonnes, 6) for c in plain] == [round(c.tonnes, 6) for c in hauled]
+    assert [round(c.grade, 6) for c in plain] == [round(c.grade, 6) for c in hauled]
+    assert all(c.stand is None for c in plain)
+    assert any(c.stand is not None for c in hauled)
