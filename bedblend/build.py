@@ -173,6 +173,7 @@ def build(
     material: Material = DEFAULT_MATERIAL,
     route: Callable[[Payload], str] | None = None,
     verify_every: int = 0,
+    after_load: Callable[[int, Terrain, BlockModel], None] | None = None,
 ) -> BuildResult:
     """Run the whole plan, load by load, and return what happened.
 
@@ -351,6 +352,14 @@ def build(
                 _doze(terrain, model, area, crest_drop_m, repose_deg, fleet.max_grade,
                       access_only=not full)
             )
+
+        # BUILD AND RECLAIM ARE NOT ALWAYS SEQUENTIAL. Some operations fill a pile and then take it
+        # down; plenty of others feed and draw at the same time, and the two produce different piles
+        # from the same ore because the material a cut crosses depends on how much of the campaign
+        # had arrived when it was taken. The caller gets a hook after every placed load so it can run
+        # a reclaim cut against the pile as it stands, rather than only against the finished one.
+        if after_load is not None:
+            after_load(len(result.placed), terrain, model)
 
         if verify_every and seq % verify_every == 0:
             model.assert_consistent(terrain)

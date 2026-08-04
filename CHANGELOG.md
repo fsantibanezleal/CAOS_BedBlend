@@ -4,6 +4,16 @@ All notable changes to `bedblend` are recorded here. The format follows Keep a C
 top, and the versions follow `X.XX.XXX` (the manifest carries the semver form with the padding
 dropped).
 
+## [0.05.002] - 2026-08-04
+
+### Added
+
+- `build(..., after_load=...)`, a hook called after every placed load with the live terrain and
+  ledger. Build and reclaim are not always sequential: plenty of operations feed a pile and draw
+  from it at the same time, and the two orders produce different piles from the same ore, because
+  what a cut crosses depends on how much of the campaign had arrived when it was taken. The hook is
+  what lets a caller interleave them.
+
 ## [0.05.001] - 2026-08-03
 
 ### Fixed
