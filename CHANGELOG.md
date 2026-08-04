@@ -4,6 +4,26 @@ All notable changes to `bedblend` are recorded here. The format follows Keep a C
 top, and the versions follow `X.XX.XXX` (the manifest carries the semver form with the padding
 dropped).
 
+## [0.05.001] - 2026-08-03
+
+### Fixed
+
+- `relax_to` sweeps until the count of over-steep pairs stops falling, rather than a fixed three
+  times, and reseeds a stalled cascade on the offenders and their neighbourhood. The cascade walks
+  highest-first from wherever it is seeded, so a stall is an artefact of that order. On a
+  cross-valley fill this took the residue from 17 pairs at 45.9 degrees to none.
+
+### Changed
+
+- `assert_stable` takes a tolerance, `STABLE_TOL_DEG`, defaulting to 4 degrees, and `cells_over_repose`
+  is exported for the reseed. The tolerance is set from two requirements rather than from what made a
+  build pass: it must catch the defect the invariant exists for, which was 446 pairs with the worst at
+  55.9 degrees against an imposed 37, and it must not flag residue small against the uncertainty in
+  the angle itself, which for ores spans 34 to 60 degrees. Nineteen of twenty-one measured scenarios
+  relax to ZERO pairs over the strict angle and use none of it.
+- A cell carrying less than a millimetre of material is treated as bare. It cannot stand at an angle:
+  shedding everything it has leaves the ground.
+
 ## [0.05.000] - 2026-08-03
 
 ### Fixed, and every one of these was measured rather than reasoned about
