@@ -54,7 +54,7 @@ export belong to the application that consumes this engine, not to the engine.
 """
 from __future__ import annotations
 
-__version__ = "0.05.000"
+__version__ = "0.05.001"
 
 from .blending import (
     VRR_FORMULA_LABEL,
