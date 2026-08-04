@@ -35,7 +35,7 @@ states a precision that belongs to the simulation and not to any real operation.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .terrain import Terrain
 
@@ -176,11 +176,24 @@ class BlockModel:
                 want -= t
             else:
                 # Split: the upper slice leaves, the lower slice stays.
+                #
+                # `replace`, NOT A POSITIONAL REBUILD, and the difference was forty percent of the
+                # coarse field. This rebuilt the departing slice by listing nine of `Parcel`'s TEN
+                # fields; `coarse_fraction` is the tenth and defaults to zero, so every slice that
+                # left was stamped with a coarse fraction of nothing. Thickness was conserved
+                # exactly, so the ledger-versus-terrain assertion passed. Grade, source block, event
+                # id, lift, area, uncertainty and displacement were all inside the nine, so
+                # provenance and grade both survived. The only field that died was the one no
+                # invariant covered, and it is the observable the entire segregation half of the
+                # product is measured on: the shipped reference pile read a thickness-weighted
+                # coarse fraction of 0.2093 against the 0.35 that was placed, with 43 cells at
+                # exactly zero, which is impossible for material that was put there.
+                #
+                # `replace` copies every declared field and overrides only what is named, so a field
+                # added to `Parcel` later is carried without anyone having to remember it. That is
+                # the actual fix: not restoring one argument, but making the class of bug impossible.
                 cut = p.z1_m - want
-                out.append(
-                    Parcel(cut, p.z1_m, p.grade, p.source_block, p.event_id, p.lift, p.area,
-                           p.grade_uncertainty, p.displacement_m)
-                )
+                out.append(replace(p, z0_m=cut))
                 p.z1_m = cut
                 want = 0.0
         out.reverse()   # preserve original stacking order for the destination

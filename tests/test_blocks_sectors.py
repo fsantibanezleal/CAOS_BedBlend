@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from bedblend.blocks import BlockModel, transfer_distances
+from bedblend.blocks import BlockModel, Parcel, transfer_distances
 from bedblend.design import rectangular_yard
 from bedblend.dozer import level
 from bedblend.dump import place_paddock
@@ -182,3 +182,65 @@ def test_homogeneity_map_finds_the_uniform_ground():
     vals = [v for v in h if v is not None]
     assert vals, "the homogeneity map is empty"
     assert min(vals) < max(vals), "the map is flat, so it distinguishes nothing"
+
+
+# ------------------------------------------------------------------------------------------------
+# THE FIELD THAT DIED BECAUSE NOTHING CHECKED IT.
+#
+# `take_from_top` rebuilt the departing slice of a split parcel by listing nine of Parcel's TEN
+# fields. `coarse_fraction` is the tenth and defaults to zero. Thickness was conserved exactly so the
+# ledger-versus-terrain assertion passed; grade, provenance, lift, area, uncertainty and displacement
+# were all inside the nine. The only field that died was the one no invariant covered, and it is the
+# observable the whole segregation half of the product is measured on: the shipped pile read a
+# thickness-weighted coarse fraction of 0.2093 against 0.35 placed, a 40.2 percent deficit, and the
+# material doc explained that range as physics.
+# ------------------------------------------------------------------------------------------------
+
+
+def test_a_split_slice_differs_from_its_parent_only_in_its_z_interval():
+    """Iterate the DECLARED fields, so a field added to Parcel later is covered without anyone
+    remembering to cover it. Naming the fields one by one is how this happened in the first place."""
+    from dataclasses import fields
+
+    p = Parcel(z0_m=0.0, z1_m=2.0, grade=0.71, source_block=4, event_id=17, lift=2,
+               area="north", grade_uncertainty=0.09, displacement_m=13.5, coarse_fraction=0.42)
+    bm = BlockModel(nx=1, ny=1, cell_m=2.5, columns=[[p]])
+    moved = bm.take_from_top(0, 1.0)[0]
+    stayed = bm.columns[0][0]
+    for f in fields(Parcel):
+        if f.name in ("z0_m", "z1_m"):
+            continue
+        assert getattr(moved, f.name) == getattr(stayed, f.name), (
+            f"{f.name} did not survive the split"
+        )
+
+
+def test_species_mass_is_conserved_by_a_split():
+    """Volume conservation was already asserted and it was NOT enough: the defect conserved thickness
+    exactly while destroying half the coarse in every split. Assert the second moment as well."""
+    p = Parcel(z0_m=0.0, z1_m=2.0, grade=0.5, source_block=1, event_id=1, lift=0, area="a",
+               coarse_fraction=0.35)
+    bm = BlockModel(nx=1, ny=1, cell_m=2.5, columns=[[p]])
+    before = p.thickness_m * p.coarse_fraction
+    moved = bm.take_from_top(0, 1.0)
+    after = sum(x.thickness_m * x.coarse_fraction for x in moved)
+    after += sum(x.thickness_m * x.coarse_fraction for x in bm.columns[0])
+    assert abs(after - before) < 1e-12
+
+
+def test_species_mass_survives_many_transfers():
+    """The real path: every dozer pass and every relaxation transfer goes through apply_transfers,
+    and the shipped reference case records a mean displacement of 19.5 m, so material has been split
+    many times over. One split losing half is a pile losing most of it."""
+    cols = [[Parcel(z0_m=0.0, z1_m=4.0, grade=0.5, source_block=i, event_id=i, lift=0, area="a",
+                    coarse_fraction=0.35)] for i in range(4)]
+    bm = BlockModel(nx=4, ny=1, cell_m=2.5, columns=cols)
+    def coarse() -> float:
+        return sum(p.thickness_m * p.coarse_fraction for col in bm.columns for p in col)
+    before = coarse()
+    for k in range(300):
+        src, dst = k % 4, (k + 1) % 4
+        bm.apply_transfers([(src, dst, 0.05)])
+    assert abs(coarse() - before) < 1e-9, (
+        f"coarse species mass drifted from {before:.6f} to {coarse():.6f} over 300 transfers"
+    )

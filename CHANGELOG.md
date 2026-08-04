@@ -4,6 +4,39 @@ All notable changes to `bedblend` are recorded here. The format follows Keep a C
 top, and the versions follow `X.XX.XXX` (the manifest carries the semver form with the padding
 dropped).
 
+## [0.06.001] - 2026-08-04
+
+### Fixed
+
+- **A parcel split destroyed the coarse fraction of the slice that left, and it had been doing so in
+  every artifact this engine has ever produced.** `BlockModel.take_from_top` rebuilt the departing
+  slice by listing NINE of `Parcel`'s TEN fields; `coarse_fraction` is the tenth and defaults to
+  zero. Measured on a consumer's shipped reference pile: a thickness-weighted coarse fraction of
+  0.2093 against the 0.35 that was placed, a 40.2 percent deficit, with 43 cells reading exactly
+  zero, which is impossible for material somebody put there.
+
+  **Nothing caught it, and the reason is worth recording.** Thickness is conserved exactly by the
+  split, so the ledger-versus-terrain assertion passed. Grade, source block, event id, lift, area,
+  uncertainty and displacement were all inside the nine arguments, so provenance and grade both
+  survived. The only field that died was the one no invariant covered, and it happens to be the
+  observable that every size-segregation result is read from. Downstream, a consumer's documentation
+  had begun explaining the resulting spread as physics.
+
+  The path is hot: `apply_transfers` is the single route for every dozer pass and every relaxation
+  transfer, and reclaim uses it too, so material is split many times over a campaign.
+
+  The fix is `dataclasses.replace(p, z0_m=cut)` rather than a positional rebuild, which copies every
+  declared field and overrides only the interval. A field added to `Parcel` in a later release is
+  carried automatically. That is the actual fix: not restoring one argument, but making the class of
+  bug impossible.
+
+### Tests
+
+- Three new invariants: a split slice differs from its parent ONLY in its z interval, iterating the
+  declared fields so a future field is covered without anyone remembering; species mass is conserved
+  by a split; and species mass survives 300 transfers through `apply_transfers`, which is the path
+  the dozer and the relaxation actually take. 119 tests, ruff clean.
+
 ## [0.06.000] - 2026-08-04
 
 ### Added
