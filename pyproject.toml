@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bedblend"
-version = "0.05.000"
+version = "0.05.001"
 description = "A bed-blending stockpile engine: repose-angle deposition, Gray-Thornton kinetic size segregation, a per-cell lot ledger with provenance, and the blending metrics (variance reduction, variograms, residence time)."
 readme = "README.md"
 requires-python = ">=3.10"
