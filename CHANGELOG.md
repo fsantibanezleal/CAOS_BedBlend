@@ -4,6 +4,103 @@ All notable changes to `bedblend` are recorded here. The format follows Keep a C
 top, and the versions follow `X.XX.XXX` (the manifest carries the semver form with the padding
 dropped).
 
+## [0.07.000] - 2026-08-04
+
+Two defects of the same kind, found the same way: the code that was documented and the code that ran
+were different code, and nothing compared them. One was in the segregation half of the engine, one in
+the reclaim half.
+
+### Changed
+
+- **The Gray-Thornton solver is now what runs.** `segregation.py` integrates kinetic sieving as a
+  conservation law, `d(phi)/dx + d(F)/dz = 0` with `F(phi) = -Sr phi (1 - phi)`, a Godunov flux, CFL
+  sub-stepping and a deposition split that conserves species mass exactly. It had a full passing test
+  suite. **Nothing in any shipped path called it.** What ran was `facesegregation.segregate_face`,
+  three fitted curves with six constants, documented everywhere as Gray-Thornton kinetic sieving and
+  rated SOTA. The directions were published and right, which is why it survived: a defensible
+  operational model wearing the label of a validated constitutive one.
+
+  `segregate_face` now marches a real `FlowingLayer` down the face and deposits with `split_base`.
+  **The size distribution at every point on the face comes from the solver and from nothing else.**
+  Two quantities remain operational observations, both published, both labelled, and neither touches
+  the size distribution: where the mass lands down the face, and how much overruns the toe.
+
+- **Diffusive remixing, Gray and Chugunov 2006 (doi:10.1017/S0022112006002977).** Wiring the 2005
+  solver alone was not enough and the measurement says why: the pure hyperbolic flux separates the
+  species completely and then stops, giving an on-face sorting index of 0.5162 at Sr = 1.5 and 0.5162
+  at Sr = 15, while real dumps sit between Sr = 1.8 and Sr = 4. Every scenario would have reported
+  identical segregation whatever its drop height. The remixing term restores the dependence across the
+  whole operating range and is the direct successor to the paper already cited. `Sr = 0` still gives an
+  exactly passive tracer, so the negative control is unchanged.
+
+- **A cut is now bounded by the machine, not by the face.** `cut` spread the tonnage proportionally
+  over every cell of the working face, so the ground a cut disturbed was the whole face however little
+  came out of it. Measured on the shipped artifacts: 632 cuts at a mean footprint of 594 square metres,
+  worst case the entire 900 square metre slab, one scenario removing 355 tonnes while touching 486 of
+  them. The symptom that needs no geometry to see is the provenance, where a single 881 tonne cut
+  reported material from 108 distinct dig blocks; fifteen bucket passes cannot sample 108 dig blocks.
+
+  New `LoaderSpec` carries the working envelope, `ReclaimFace.bite` digs the cells within reach of the
+  machine's stance nearest first at one bench lift each until the tonnage is met, and `ReclaimFace.step`
+  trams it along the face and advances the face deeper when the width is swept. New `next_cut` assembles
+  a cut across as many stances as it takes, because the reach bounds what one stance yields and must not
+  also bound the parcel the plant asked for.
+
+- **`LoadRecord.segregation_index` is now the measured sorting of the load**, computed from the profile
+  the march produced, and `LoadRecord.sr` carries the segregation number it was solved at. It used to
+  be `intensity`, the strength of the three published DRIVERS, which is an input to the physics rather
+  than a result of it.
+
+- **`solve_route(strict_goal=True)`** withdraws the goal-cell exemption from the gradient rule for a
+  truck that will PARK rather than tip over an edge, and the reclaim haulage asks for it. Measured
+  honestly: on the current scenarios this changes no route. It is a correction of the semantics, not
+  the repair of an observed defect.
+
+- **`haul_cycle` returns a `HaulCycle` record** rather than a four-tuple, and `Route` now carries the
+  unsimplified `cells` behind its polyline.
+
+### Fixed
+
+- **`reclaim._take` destroyed the coarse fraction of every parcel it removed**, in both the FIFO and
+  the FULL_HEIGHT branches, by rebuilding a split parcel positionally with nine of `Parcel`'s ten
+  fields. Identical in shape to the `blocks.py` defect fixed in 0.06.001 and surviving in a second
+  place. Both now use `dataclasses.replace`, and the test iterates `fields(Parcel)` rather than naming
+  them, because naming them is how it happened.
+
+- **`bedblend.__version__` had drifted two releases behind `pyproject.toml`**, reporting 0.05.002 while
+  0.06.001 was on PyPI, so anything logging the engine version beside a result recorded the wrong
+  engine. It now reads from the packaging metadata and cannot drift.
+
+- **`ReclaimFace` centred its across-face window on the middle of the PAD**, which is the middle of the
+  pile only when there is one pile and it is centred. New `centre_t_m` anchors it on the area. Harmless
+  for layouts that tile along one axis and share the other, silently wrong for the first that does not.
+
+### Added
+
+- `Avalanche` and `avalanche_state`: the flowing layer's path length, thickness, velocity, percolation
+  velocity and segregation number, exposed so the quantities behind Sr can be presented rather than
+  asserted.
+- `total_segregation_index`, which counts what ran past the toe as toe material. The on-face index is
+  not monotone in drop height and should not be: above about fifteen metres the extra drop throws more
+  coarse clear of the face than it sorts onto it. Reporting only the first made a taller bench look
+  like it sorted less.
+- `Cut.coarse_fraction`: the size of the feed delivered. The engine modelled the sorting in detail and
+  discarded the answer at the one moment it became a number a plant would care about.
+
+### Notes on what is claimed
+
+Two anchored constants remain, both named, both from the literature rather than fitted to this
+material: `PERCOLATION_COEFFICIENT` in `facesegregation` and `PECLET_DEFAULT` in `segregation`. These
+are what the DEM calibration lane exists to measure.
+
+Wiring the real solver also separated two mechanisms the fitted curve had merged, and they disagree.
+Steeper faces are reported to increase segregation; that is BALLISTIC trajectory segregation, which
+Gray-Thornton's equation does not contain. Kinetic sieving on the face weakens slightly with angle
+because a steeper face is a shorter run from crest to toe, while the material thrown clear of the toe
+grows with angle and is almost pure coarse. Both are reported separately. The old curve asserted the
+same direction for both, which read as agreement with the source and was really the model having no
+way to disagree.
+
 ## [0.06.001] - 2026-08-04
 
 ### Fixed

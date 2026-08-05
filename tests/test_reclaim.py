@@ -13,7 +13,16 @@ import pytest
 from bedblend.blocks import BlockModel, transfer_distances
 from bedblend.design import rectangular_yard
 from bedblend.dump import place_paddock
-from bedblend.reclaim import Cut, ReclaimFace, ReclaimMethod, advance, campaign, cut
+from bedblend.reclaim import (
+    Cut,
+    ReclaimFace,
+    ReclaimMethod,
+    advance,
+    campaign,
+    cut,
+    haul_cycle,
+    next_cut,
+)
 from bedblend.relax import assert_stable, relax_to
 from bedblend.terrain import Terrain, TruckSpec
 
@@ -111,13 +120,39 @@ def test_the_face_advances_in_order_and_eventually_runs_out():
 
 
 def test_lifo_and_fifo_deliver_different_grades():
-    """The extraction order is a real decision. If it does not change the feed, it is not modelled."""
+    """The extraction order is a real decision. If it does not change the feed, it is not modelled.
+
+    Asserted with a face height SHORTER than the column, which is the only situation in which the
+    order within a column can matter and is what ``max_face_m`` is for. The pile here is about six
+    metres and the machine will cut fifteen, so a cut that is allowed its full lift takes the whole
+    column and the three methods necessarily agree; that degeneracy is asserted directly below rather
+    than left as a surprise.
+    """
     t1, _a1, m1 = _stocked()
     t2, _a2, m2 = _stocked()
-    c_lifo = cut(t1, m1, _face(method=ReclaimMethod.LIFO), 3000.0, repose_deg=REPOSE)
-    c_fifo = cut(t2, m2, _face(method=ReclaimMethod.FIFO), 3000.0, repose_deg=REPOSE)
+    c_lifo = cut(t1, m1, _face(method=ReclaimMethod.LIFO, max_face_m=3.0), 3000.0, repose_deg=REPOSE)
+    c_fifo = cut(t2, m2, _face(method=ReclaimMethod.FIFO, max_face_m=3.0), 3000.0, repose_deg=REPOSE)
     assert c_lifo.tonnes == pytest.approx(c_fifo.tonnes, rel=1e-6)
     assert c_lifo.grade != pytest.approx(c_fifo.grade, rel=1e-6)
+
+
+def test_a_full_column_cut_makes_the_order_within_it_irrelevant():
+    """Taking a whole column top to bottom delivers the same material whichever end you start at.
+
+    This is not a limitation, it is the arithmetic, and it is the reason the test above has to
+    constrain the face height to see any difference at all. It is asserted because the previous
+    engine's proportional skim never took a full column, so the degeneracy could not arise and its
+    absence was mistaken for the extraction order always mattering.
+    """
+    grades = []
+    for method in (ReclaimMethod.LIFO, ReclaimMethod.FIFO, ReclaimMethod.FULL_HEIGHT):
+        t, _a, m = _stocked()
+        # max_face_m well above the roughly six metre column, so every engaged cell is taken out.
+        grades.append(cut(t, m, _face(method=method, max_face_m=50.0), 3000.0, repose_deg=REPOSE))
+    assert all(c.tonnes > 0 for c in grades)
+    for c in grades[1:]:
+        assert c.tonnes == pytest.approx(grades[0].tonnes, rel=1e-9)
+        assert c.grade == pytest.approx(grades[0].grade, rel=1e-9)
 
 
 def test_provenance_sums_to_one_and_carries_its_displacement():
@@ -144,11 +179,19 @@ def test_a_campaign_produces_a_feed_series_that_drains_the_pile():
 
 def test_full_height_blends_more_than_lifo():
     """"processing the stockpile in parallel vertical approaches": a vertical cut mixes the lifts,
-    a top-down cut does not. The blending method must show lower feed variance."""
+    a top-down cut does not. The blending method must show lower feed variance.
+
+    Run with a face height SHORTER than the column, for the same reason
+    `test_lifo_and_fifo_deliver_different_grades` is: a cut allowed its full lift takes the whole
+    column, and then a vertical approach and a top-down one remove exactly the same material. The
+    methods can only differ while there is column left above or below the cut, which is what
+    `max_face_m` decides. With the full lift allowed the two variances agree to four significant
+    figures, and that is the arithmetic rather than the blending failing.
+    """
     def feed(method: ReclaimMethod) -> list[float]:
         t, _a, m = _stocked()
         cs = campaign(
-            t, m, _face(method=method, depth_m=10.0),
+            t, m, _face(method=method, depth_m=10.0, max_face_m=2.0),
             cut_tonnes=1500.0, n_cuts=20, repose_deg=REPOSE,
         )
         return [c.grade for c in cs if c.tonnes > 0]
@@ -226,23 +269,76 @@ def test_the_truck_stands_on_drivable_ground_not_on_the_face():
 
 def test_the_route_is_drivable_end_to_end():
     """Every step of both legs obeys the same per-step gradient rule the build side uses, so a
-    reclaim truck cannot drive somewhere a haul truck could not."""
+    reclaim truck cannot drive somewhere a haul truck could not.
+
+    CHECKED AT THE MOMENT THE ROUTE WAS SOLVED, which means driving the campaign one cut at a time.
+    A route is solved on the surface the cut just left, and the next cut relaxes that surface, so
+    inspecting a finished campaign's routes against the final terrain asks whether a path driven an
+    hour ago is drivable over ground that has since been dug away. That is not the invariant, and the
+    version of this test that did it passed only because the discrepancies happened to be small.
+
+    ON THE GRID PATH, NOT ON THE POLYLINE. `Route.points` collapses collinear runs, so consecutive
+    points can be twenty cells apart while `step_ok` divides the rise by ONE cell width, reporting a
+    gradient twentyfold too steep. `approach_cells` and `departure_cells` are the adjacent-cell path
+    the rule is actually about.
+    """
     from bedblend.truck import step_ok
 
     t, _area, model = _stocked()
-    cuts = campaign(
-        t, model, _face(depth_m=10.0), cut_tonnes=1500.0, n_cuts=6, repose_deg=REPOSE,
-        exit_xy=_exit_of(t), max_grade=MAX_GRADE,
-    )
-    for c in (x for x in cuts if x.stand is not None):
-        for leg in (c.approach, c.departure):
-            for a, b in itertools.pairwise(leg):
-                ca, cb = t.cell_at(*a), t.cell_at(*b)
+    face = _face(depth_m=10.0)
+    exit_xy = _exit_of(t)
+    checked = 0
+    served = 0
+    for _ in range(6):
+        c = next_cut(t, model, face, 1500.0, repose_deg=REPOSE)
+        if c is None:
+            break
+        haul_cycle(t, c.cells, exit_xy=exit_xy, max_grade=MAX_GRADE).apply_to(c)
+        if c.stand is None:
+            continue
+        served += 1
+        for leg in (c.approach_cells, c.departure_cells):
+            assert leg, "a served cut recorded a leg with no grid path behind it"
+            for ca, cb in itertools.pairwise(leg):
                 if ca == cb:
                     continue
                 assert step_ok(t, ca, cb, MAX_GRADE), (
-                    f"a leg steps from {a} to {b}, which no truck could climb"
+                    f"a leg steps from {t.xy(ca)} to {t.xy(cb)}, "
+                    f"a rise of {abs(t.z[cb] - t.z[ca]):.2f} m, which no truck could climb"
                 )
+                checked += 1
+    assert served > 0, "no cut was served, so the assertion proved nothing"
+    assert checked > 0, "no route steps were checked, so the assertion proved nothing"
+
+
+def test_a_parked_truck_does_not_get_the_tipping_exemption():
+    """The last step onto the stand has to be climbable, because the truck is parking, not tipping.
+
+    `solve_route` exempts the GOAL cell from the gradient rule so that a haul truck can spot at a
+    crest and tip over the edge, which is the whole edge-dumping campaign. A reclaim truck routed to
+    a loading stand is doing the opposite thing and should not inherit it.
+
+    Stated plainly because the distinction matters: on these fixtures the exemption changes no route,
+    since the stand is already picked from the passability mask and the flood fill. This pins the
+    semantics so the case where it WOULD matter cannot regress; it is not the repair of a defect that
+    was measured, and the docstring says so rather than implying otherwise.
+    """
+    from bedblend.truck import solve_route, step_ok
+
+    t, _area, model = _stocked()
+    face = _face(depth_m=10.0)
+    exit_xy = _exit_of(t)
+    c = next_cut(t, model, face, 1500.0, repose_deg=REPOSE)
+    assert c is not None
+    hc = haul_cycle(t, c.cells, exit_xy=exit_xy, max_grade=MAX_GRADE)
+    assert hc.stand is not None
+
+    strict = solve_route(t, exit_xy, hc.stand, max_grade=MAX_GRADE, strict_goal=True).cells
+    assert step_ok(t, strict[-2], strict[-1], MAX_GRADE), "the strict route still ends unclimbably"
+    # And the haul cycle is the one that asked for it.
+    assert hc.approach is not None
+    tail = hc.approach.cells
+    assert step_ok(t, tail[-2], tail[-1], MAX_GRADE)
 
 
 def test_without_an_exit_the_campaign_still_delivers_but_records_no_haulage():
@@ -259,3 +355,152 @@ def test_without_an_exit_the_campaign_still_delivers_but_records_no_haulage():
     assert [round(c.grade, 6) for c in plain] == [round(c.grade, 6) for c in hauled]
     assert all(c.stand is None for c in plain)
     assert any(c.stand is not None for c in hauled)
+
+
+# ---------------------------------------------------------------------------------------------
+# THE FOOTPRINT OF A CUT IS THE MACHINE'S, NOT THE FACE'S
+# ---------------------------------------------------------------------------------------------
+# The engine used to spread every cut proportionally over every cell of the working face, so the
+# ground disturbed by a cut was the whole face no matter how little material came out of it.
+# Measured on the shipped artifacts: 632 cuts, mean footprint 594 square metres, worst case the
+# entire 900 square metre slab, and one scenario removing 355 tonnes while touching 486 of them.
+# Nothing failed, because nothing measured the footprint. These do.
+
+
+def test_the_footprint_of_a_cut_scales_with_the_tonnage_taken():
+    """A small cut leaves a small hole. This is the defect, stated as a property."""
+    small = cut(*_stocked()[::2], _face(), 300.0, repose_deg=REPOSE)  # type: ignore[misc]
+    big = cut(*_stocked()[::2], _face(), 3000.0, repose_deg=REPOSE)  # type: ignore[misc]
+    assert small.tonnes < big.tonnes
+    assert len(small.cells) < len(big.cells), (
+        f"a {small.tonnes:.0f} t cut touched {len(small.cells)} cells and a "
+        f"{big.tonnes:.0f} t cut touched {len(big.cells)}: the footprint is not the machine's"
+    )
+    # And it is proportionate rather than merely ordered: ten times the tonnage from the same
+    # ground cannot come out of a similar number of cells.
+    assert len(big.cells) > 2 * len(small.cells)
+
+
+def test_a_cut_never_reaches_outside_the_machines_dig_radius():
+    """The hard bound. Whatever the tonnage asked for, the machine cannot dig what it cannot reach."""
+    t, _a, m = _stocked()
+    face = _face()
+    # Ask for far more than the pile holds, so nothing but the reach limits the answer.
+    sx, sy = face.stance(t)
+    c = cut(t, m, face, 10_000_000.0, repose_deg=REPOSE)
+    assert c.cells
+    r = face.loader.dig_radius_m
+    for cell in c.cells:
+        x, y = t.xy(cell)
+        d = math.hypot(x - sx, y - sy)
+        assert d <= r + 1e-9, f"cell {cell} dug at {d:.1f} m from a stance with {r:.1f} m of reach"
+
+
+def test_the_footprint_is_a_small_fraction_of_the_face_it_works():
+    """The regression, in the terms it was found in: cells engaged against cells available."""
+    t, _a, m = _stocked()
+    face = _face()
+    envelope = len(face.engaged_cells(t))
+    c = cut(t, m, face, 900.0, repose_deg=REPOSE)
+    assert c.tonnes > 0
+    assert envelope > 0
+    assert len(c.cells) < envelope / 3.0, (
+        f"a {c.tonnes:.0f} t cut engaged {len(c.cells)} of {envelope} cells on the face"
+    )
+
+
+def test_the_machine_trams_along_the_face_instead_of_working_one_spot():
+    """Successive cuts move. A campaign taken entirely from one stance is not a campaign."""
+    t, _a, m = _stocked()
+    face = _face()
+    cuts = campaign(t, m, face, cut_tonnes=900.0, n_cuts=8, repose_deg=REPOSE)
+    assert len(cuts) >= 4
+    centres = {(round(_mid(t, c.cells)[0], 0), round(_mid(t, c.cells)[1], 0)) for c in cuts}
+    assert len(centres) > 1, "every cut of the campaign came from the same place"
+
+
+def _mid(t: Terrain, cells: list[int]) -> tuple[float, float]:
+    xs = [t.xy(c)[0] for c in cells]
+    ys = [t.xy(c)[1] for c in cells]
+    return (sum(xs) / len(xs), sum(ys) / len(ys)) if cells else (0.0, 0.0)
+
+
+def test_the_reclaimed_feed_carries_its_size_split():
+    """`coarse_fraction` must survive the trip out of the pile, on every extraction order.
+
+    It did not. `_take` rebuilt a split parcel positionally with nine of `Parcel`'s ten fields for
+    both FIFO and FULL_HEIGHT, so every reclaimed parcel left with its coarse fraction zeroed. That
+    is the same defect, in the same shape, as the one that put a 40 percent coarse deficit into a
+    shipped release from `blocks.py`. Asserted for each method rather than for one.
+    """
+    for method in (ReclaimMethod.LIFO, ReclaimMethod.FIFO, ReclaimMethod.FULL_HEIGHT):
+        t, area, model = _stocked_with_coarse(0.42)
+        c = cut(t, model, _face(method=method, max_face_m=3.0), 1200.0, repose_deg=REPOSE)
+        assert c.tonnes > 0, method
+        assert c.coarse_fraction == pytest.approx(0.42, abs=1e-6), (
+            f"{method.value} delivered {c.tonnes:.0f} t at coarse fraction "
+            f"{c.coarse_fraction:.4f} from a pile placed uniformly at 0.42"
+        )
+
+
+def _stocked_with_coarse(coarse: float, n_loads: int = 120):
+    """The same pile, placed at a known uniform size split so the reclaimed split is checkable."""
+    t = Terrain.flat(48, 48, CELL)
+    plan = rectangular_yard(
+        n_areas=1, area_width_m=60.0, area_length_m=60.0, bench_height_m=6.0, n_benches=1,
+        margin_m=30.0,
+    )
+    plan.row_spacing_m = 8.0
+    area = plan.areas[0]
+    truck = TruckSpec()
+    model = BlockModel.over(t)
+    for k, tp in enumerate(plan.paddock_tips(area, area.benches[0])[:n_loads]):
+        pl = place_paddock(t, tp.x_m, tp.y_m, tp.heading_rad, truck.load_volume_m3, truck)
+        model.record(
+            t, pl.cells, pl.added_m,
+            grade=0.30 + 0.004 * k, source_block=k // 20, event_id=k, lift=0, area=area.name,
+            coarse_fraction=[coarse] * len(pl.cells),
+        )
+        moves = relax_to(t, REPOSE, active=set(pl.cells))
+        if moves:
+            model.apply_transfers(
+                [(a, b, v * model.cell_area_m2) for a, b, v in moves],
+                distances=transfer_distances(t, moves),
+            )
+    return t, area, model
+
+
+def test_a_face_that_outruns_a_growing_pile_goes_back_to_the_start():
+    """A concurrent campaign reclaims a pile that is still being built.
+
+    The face advances as it works, so it can run past the end of the material simply by being ahead
+    of the trucks. Left parked out there every later cut finds nothing and the campaign stops without
+    saying so: measured on the artifacts, the concurrent scenario fell from 28 cuts to 2 and the surge
+    scenario from 74 to 2, both still producing a plausible-looking feed series from the few that got
+    through. That is the worst shape a defect can take, so it is pinned here.
+    """
+    t, _area, model = _stocked()
+    face = _face(depth_m=10.0)
+    origin = face.position_m
+
+    # Run the face off the end deliberately.
+    for _ in range(200):
+        if not advance(face, t):
+            break
+    assert face.position_m > origin, "the face never advanced"
+    assert not advance(face, t), "the face should now be past the material"
+
+    # A cut from out there finds nothing, and `next_cut` must recover rather than give up forever.
+    assert cut(t, model, face, 1500.0, repose_deg=REPOSE).tonnes == 0.0
+    c = next_cut(t, model, face, 1500.0, repose_deg=REPOSE)
+    assert c is not None and c.tonnes > 0, (
+        "a face that outran the pile never came back, so every later cut would find nothing"
+    )
+    assert face.position_m <= origin + face.depth_m * 3, "the face did not rewind toward its start"
+
+
+def test_an_empty_pad_still_terminates():
+    """The rewind must not turn an exhausted pile into an endless search."""
+    t = Terrain.flat(48, 48, CELL)
+    model = BlockModel.over(t)
+    assert next_cut(t, model, _face(depth_m=10.0), 1500.0, repose_deg=REPOSE) is None

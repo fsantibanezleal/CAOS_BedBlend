@@ -54,7 +54,16 @@ export belong to the application that consumes this engine, not to the engine.
 """
 from __future__ import annotations
 
-__version__ = "0.05.002"
+# ONE SOURCE OF TRUTH FOR THE VERSION, which is the packaging metadata. This was a hand-maintained
+# literal and it had drifted two releases behind `pyproject.toml`: the module reported 0.05.002 while
+# 0.06.001 was on PyPI, so anything that logged the engine version alongside a result recorded the
+# wrong engine. A literal that has to be edited in step with another file eventually is not.
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
+try:
+    __version__ = _pkg_version("bedblend")
+except PackageNotFoundError:  # running from a source tree that was never installed
+    __version__ = "0.0.0+unknown"
 
 from .blending import (
     VRR_FORMULA_LABEL,
@@ -88,11 +97,14 @@ from .dump import (
     run_out_for_bench,
 )
 from .facesegregation import (
+    Avalanche,
     FaceSegregation,
     apparent_repose_deg,
+    avalanche_state,
     intensity,
     segregate_face,
     segregation_index,
+    total_segregation_index,
 )
 from .material import (
     COMPACTION_BAND,
@@ -101,7 +113,16 @@ from .material import (
     Material,
     SizeSplit,
 )
-from .reclaim import Cut, ReclaimFace, ReclaimMethod, advance, campaign, cut
+from .reclaim import (
+    Cut,
+    LoaderSpec,
+    ReclaimFace,
+    ReclaimMethod,
+    advance,
+    campaign,
+    cut,
+    next_cut,
+)
 from .relax import (
     FRESH_HEAP_DEG,
     FRESH_HEAP_SLOPE,
@@ -126,7 +147,7 @@ from .sectors import (
     rollup,
     rollup_by_lift,
 )
-from .segregation import CFL, NZ_DEFAULT, FlowingLayer, segregation_number
+from .segregation import CFL, NZ_DEFAULT, PECLET_DEFAULT, FlowingLayer, segregation_number
 from .stream import (
     DigBlock,
     DigSequence,
@@ -196,6 +217,7 @@ __all__ = [
     "Phase",
     "Placement",
     "ProfileStats",
+    "LoaderSpec",
     "ReclaimFace",
     "ReclaimMethod",
     "ReposeViolation",
@@ -223,6 +245,7 @@ __all__ = [
     "critical_drop",
     "cumulative_tonnes",
     "cut",
+    "next_cut",
     "dig_sequence",
     "dimensionless_variance",
     "distance_to_crest",
@@ -252,6 +275,10 @@ __all__ = [
     "rollup_by_lift",
     "run_out_for_bench",
     "sectors_compare",
+    "Avalanche",
+    "avalanche_state",
+    "total_segregation_index",
+    "PECLET_DEFAULT",
     "segregate_face",
     "segregation_index",
     "segregation_number",

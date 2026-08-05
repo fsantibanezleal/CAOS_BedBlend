@@ -52,6 +52,25 @@ from __future__ import annotations
 NZ_DEFAULT = 32
 CFL = 0.4
 
+# DIFFUSIVE REMIXING, Gray and Chugunov 2006, "A theory for particle size segregation in shallow
+# granular free-surface flows", J. Fluid Mech. 569, 365-398, doi:10.1017/S0022112006002977. It is the
+# direct successor to the 2005 paper this module already integrates, and it adds the one term that
+# paper leaves out: the random collisional remixing that opposes the sieving.
+#
+# WITHOUT IT THE MODEL SATURATES AND THE PRODUCT GOES DEAF. The pure hyperbolic flux separates the
+# species completely and then stops, so beyond about Sr = 1.5 every face gives the identical profile.
+# Measured on this engine's own reference material, the on-face sorting index was 0.5162 at Sr = 1.5
+# and 0.5162 at Sr = 15, while real dumps sit between Sr = 1.8 and Sr = 4: every scenario in the
+# product would have reported the same segregation whatever its drop height or face angle. Shocks are
+# a real feature of the 2005 solution and they are kept; what the remixing adds is that the shock has
+# a finite thickness, which is what stops the answer being binary.
+#
+# The Peclet number is the ratio of sieving to remixing, ``Pe = Sr / Dr``. Gray and Chugunov fit it
+# against chute experiments and report values of order ten; it is held here at the middle of that
+# range and, like the percolation coefficient in ``facesegregation``, it is an anchor from the
+# literature rather than a fit to this material.
+PECLET_DEFAULT = 12.0
+
 
 def _godunov_flux(pl: float, pr: float, sr: float) -> float:
     """Godunov flux for the convex flux ``F(phi) = -Sr phi (1 - phi)`` between states ``pl`` and ``pr``.
@@ -82,13 +101,25 @@ class FlowingLayer:
     cell downslope and ``split_base`` performs the deposition.
     """
 
-    __slots__ = ("nz", "phi", "sr")
+    __slots__ = ("nz", "phi", "sr", "pe")
 
-    def __init__(self, phi0: float, sr: float, nz: int = NZ_DEFAULT) -> None:
+    def __init__(
+        self, phi0: float, sr: float, nz: int = NZ_DEFAULT, pe: float = PECLET_DEFAULT
+    ) -> None:
         p = min(1.0, max(0.0, float(phi0)))
         self.nz = int(nz)
         self.sr = max(0.0, float(sr))
+        # Peclet number: sieving against remixing. Infinite (or non-positive, read as "off") recovers
+        # the pure 2005 hyperbolic model exactly, which is what the shock tests pin.
+        self.pe = float(pe)
         self.phi = [p] * self.nz
+
+    @property
+    def diffusivity(self) -> float:
+        """``Dr = Sr / Pe``. Zero when there is no sieving, so the passive-tracer control is exact."""
+        if self.pe <= 0.0 or self.pe == float("inf"):
+            return 0.0
+        return self.sr / self.pe
 
     @property
     def mean_phi(self) -> float:
@@ -102,24 +133,48 @@ class FlowingLayer:
         ``|F'(phi)| = Sr|1 - 2 phi|``, bounded by ``Sr``, so a step of ``CFL * dz / Sr`` is stable.
         No-flux boundaries are imposed by setting the surface and base interface fluxes to zero,
         which is the boundary condition in the source and is also what makes the scheme conservative.
+
+        THE REMIXING TERM, ``d/dz(Dr dphi/dz)``, is carried on the same interfaces as the segregation
+        flux and with the same no-flux walls, so the scheme stays exactly conservative with it on: the
+        species-mass test passes unchanged rather than to a looser tolerance. Being parabolic it has
+        its own stability limit, ``dz^2 / (2 Dr)``, and the sub-step honours whichever of the two
+        limits is tighter.
         """
         if self.sr <= 0.0 or dx_nd <= 0.0:
             return  # Sr = 0 is the no-segregation control: the profile is a passive tracer
         dz = 1.0 / self.nz
+        dr = self.diffusivity
         max_step = CFL * dz / self.sr
+        if dr > 0.0:
+            max_step = min(max_step, CFL * dz * dz / (2.0 * dr))
         n_sub = max(1, int(dx_nd / max_step) + 1)
         h = dx_nd / n_sub
         ratio = h / dz
+        d_ratio = dr * h / (dz * dz)
         nz = self.nz
         for _ in range(n_sub):
             phi = self.phi
             flux = [0.0] * (nz + 1)  # flux[i] sits below cell i; flux[0] and flux[nz] are the walls
             for i in range(1, nz):
                 flux[i] = _godunov_flux(phi[i - 1], phi[i], self.sr)
-            self.phi = [
-                min(1.0, max(0.0, phi[i] - ratio * (flux[i + 1] - flux[i])))
-                for i in range(nz)
-            ]
+            if d_ratio > 0.0:
+                self.phi = [
+                    min(1.0, max(0.0,
+                        phi[i]
+                        - ratio * (flux[i + 1] - flux[i])
+                        + d_ratio * (
+                            (phi[i + 1] if i + 1 < nz else phi[i])
+                            - 2.0 * phi[i]
+                            + (phi[i - 1] if i > 0 else phi[i])
+                        )
+                    ))
+                    for i in range(nz)
+                ]
+            else:
+                self.phi = [
+                    min(1.0, max(0.0, phi[i] - ratio * (flux[i + 1] - flux[i])))
+                    for i in range(nz)
+                ]
 
     def split_base(self, base_frac: float) -> tuple[float, float]:
         """Deposit the bottom ``base_frac`` of the layer and keep the rest travelling.
