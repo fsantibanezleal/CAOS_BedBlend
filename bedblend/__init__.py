@@ -35,7 +35,9 @@ THE MODULES, in the order material moves through them:
 * ``sectors``     working-region rollups and the raw-versus-model comparison
 * ``reclaim``     sequenced extraction from a face, in LIFO, FIFO or full-height order
 * ``build``       the loop that makes the above a system
-* ``segregation`` Gray and Thornton's kinetic sieving, solved with a Godunov flux
+* ``segregation`` Gray and Thornton's kinetic sieving, solved with a Godunov flux, with the
+                  diffusive remixing of Gray and Chugunov opposing it
+* ``facesegregation`` the coupling: what one cascading load does to the size split down a face
 * ``blending``    the verdict: variance reduction on a tonnage base, variograms, the 1/N bound
 * ``rtd``         residence time
 
@@ -58,7 +60,8 @@ from __future__ import annotations
 # literal and it had drifted two releases behind `pyproject.toml`: the module reported 0.05.002 while
 # 0.06.001 was on PyPI, so anything that logged the engine version alongside a result recorded the
 # wrong engine. A literal that has to be edited in step with another file eventually is not.
-from importlib.metadata import PackageNotFoundError, version as _pkg_version
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 
 try:
     __version__ = _pkg_version("bedblend")
@@ -190,10 +193,12 @@ __all__ = [
     "MEASURED_VOLUME_M3",
     "MEASURED_WIDTH_M",
     "NZ_DEFAULT",
+    "PECLET_DEFAULT",
     "PROFILE_STATS",
     "SWELL_HARD_ROCK",
     "VRR_FORMULA_LABEL",
     "Area",
+    "Avalanche",
     "Bench",
     "BlockModel",
     "BuildResult",
@@ -210,6 +215,7 @@ __all__ = [
     "Fleet",
     "FlowingLayer",
     "LoadRecord",
+    "LoaderSpec",
     "Material",
     "NoRoute",
     "Parcel",
@@ -217,7 +223,6 @@ __all__ = [
     "Phase",
     "Placement",
     "ProfileStats",
-    "LoaderSpec",
     "ReclaimFace",
     "ReclaimMethod",
     "ReposeViolation",
@@ -232,6 +237,7 @@ __all__ = [
     "advance",
     "apparent_repose_deg",
     "assert_stable",
+    "avalanche_state",
     "blending_efficiency",
     "build",
     "build_berm",
@@ -245,7 +251,6 @@ __all__ = [
     "critical_drop",
     "cumulative_tonnes",
     "cut",
-    "next_cut",
     "dig_sequence",
     "dimensionless_variance",
     "distance_to_crest",
@@ -261,6 +266,7 @@ __all__ = [
     "measured_range_t",
     "mixing_effect",
     "neighbour_table",
+    "next_cut",
     "passable_mask",
     "payloads_from",
     "place_edge",
@@ -275,10 +281,6 @@ __all__ = [
     "rollup_by_lift",
     "run_out_for_bench",
     "sectors_compare",
-    "Avalanche",
-    "avalanche_state",
-    "total_segregation_index",
-    "PECLET_DEFAULT",
     "segregate_face",
     "segregation_index",
     "segregation_number",
@@ -287,6 +289,7 @@ __all__ = [
     "spot",
     "tonnage_weighted_mean",
     "tonnage_weighted_variance",
+    "total_segregation_index",
     "transfer_distances",
     "vrr",
     "vrr_ideal",

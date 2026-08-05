@@ -434,7 +434,7 @@ def test_the_reclaimed_feed_carries_its_size_split():
     shipped release from `blocks.py`. Asserted for each method rather than for one.
     """
     for method in (ReclaimMethod.LIFO, ReclaimMethod.FIFO, ReclaimMethod.FULL_HEIGHT):
-        t, area, model = _stocked_with_coarse(0.42)
+        t, _area, model = _stocked_with_coarse(0.42)
         c = cut(t, model, _face(method=method, max_face_m=3.0), 1200.0, repose_deg=REPOSE)
         assert c.tonnes > 0, method
         assert c.coarse_fraction == pytest.approx(0.42, abs=1e-6), (

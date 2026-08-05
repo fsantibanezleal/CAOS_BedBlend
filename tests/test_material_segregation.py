@@ -5,6 +5,8 @@ avalanche to run down. These are the tests that the coupling now exists and poin
 """
 from __future__ import annotations
 
+import itertools
+
 import pytest
 
 from bedblend.facesegregation import (
@@ -143,25 +145,25 @@ def test_a_taller_face_segregates_more():
     split = SizeSplit.of(MAT.coarse_fraction)
     seq = [
         total_segregation_index(segregate_face(drop_m=float(d), face_angle_deg=37.0, mat=MAT), split)
-        for d in range(0, 31)
+        for d in range(31)
     ]
     # Strictly increasing across the operational range. The published guidance is to cap a stockpile
     # at 10 to 12 metres precisely because every extra metre segregates more, so this is the band the
     # claim is about and it is asserted metre by metre rather than at two endpoints.
-    for a, b in zip(seq[:20], seq[1:21]):
+    for a, b in itertools.pairwise(seq[:21]):
         assert b > a, f"the total index went backwards inside the operational range: {seq[:21]}"
     assert seq[20] > seq[0] + 0.4, "the height dependence is present but negligible"
 
     # Above about twenty metres it flattens to about 0.503 rather than continuing, because the overrun
     # term reaches the published cap while the on-face sieving is already near the Peclet-limited
     # equilibrium. Flat, not falling: asserted to a millesimal so a real reversal would still fail.
-    for a, b in zip(seq[20:], seq[21:]):
+    for a, b in itertools.pairwise(seq[20:]):
         assert b > a - 1e-3, f"the total index fell away above twenty metres: {seq[20:]}"
 
     # The Gray-Thornton segregation number itself is strictly increasing in the drop, which is the
     # mechanism underneath the observation and does not saturate.
     srs = [segregate_face(drop_m=float(d), face_angle_deg=37.0, mat=MAT).sr for d in range(1, 31)]
-    assert all(b > a for a, b in zip(srs, srs[1:]))
+    assert all(b > a for a, b in itertools.pairwise(srs))
 
 
 def test_a_steeper_face_throws_more_clear_of_the_toe_but_sieves_slightly_less():
@@ -183,14 +185,14 @@ def test_a_steeper_face_throws_more_clear_of_the_toe_but_sieves_slightly_less():
     faces = [segregate_face(drop_m=20.0, face_angle_deg=float(a), mat=MAT) for a in (35, 37, 40)]
 
     overruns = [f.overrun_fraction for f in faces]
-    assert all(b > a for a, b in zip(overruns, overruns[1:])), overruns
+    assert all(b > a for a, b in itertools.pairwise(overruns)), overruns
     assert all(f.overrun_coarse_fraction > 0.9 for f in faces), "the overrun should be nearly all coarse"
 
     onface = [segregation_index(f, split) for f in faces]
-    assert all(b < a for a, b in zip(onface, onface[1:])), onface
+    assert all(b < a for a, b in itertools.pairwise(onface)), onface
     # And the mechanism: shorter path, lower Sr.
     paths = [f.avalanche.path_m for f in faces]
-    assert all(b < a for a, b in zip(paths, paths[1:])), paths
+    assert all(b < a for a, b in itertools.pairwise(paths)), paths
 
 
 def test_a_face_below_the_dynamic_friction_angle_does_not_sort_at_all():

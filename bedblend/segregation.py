@@ -39,8 +39,14 @@ species. ``F`` is convex, so a Godunov flux is exact for the Riemann problem at 
 WHY THIS RUNS LIVE. Thirty-two depth cells and a handful of sub-steps per downslope cell is a few
 hundred floating-point operations per avalanche generation. The published continuum model is
 therefore cheaper than the fitted parametric curve it might have been replaced with, and it is
-defensible where the curve would not have been. That was the single most useful finding of the
-research pass and it is recorded in ``plans/stocktwin/findings.md``.
+defensible where the curve would not have been.
+
+AND FOR SEVERAL RELEASES IT DID NOT RUN LIVE, which is worth leaving in the file that says it does.
+This module was complete and tested and nothing called it; ``facesegregation`` stood in with three
+fitted curves while every document described these equations. So the paragraph above was an argument
+for a decision that had quietly been made the other way. ``facesegregation.segregate_face`` marches a
+``FlowingLayer`` now, and a release gate in the consuming product walks the import graph from its
+entry point and fails if a method rated SOTA names a module nothing invokes.
 
 THE COUPLING TO THE PILE. Fines drain to the BASE of the flowing layer. Material that stops on the
 flank is drawn from that base, and material that keeps travelling is drawn from the top. So the toe,
@@ -101,7 +107,7 @@ class FlowingLayer:
     cell downslope and ``split_base`` performs the deposition.
     """
 
-    __slots__ = ("nz", "phi", "sr", "pe")
+    __slots__ = ("nz", "pe", "phi", "sr")
 
     def __init__(
         self, phi0: float, sr: float, nz: int = NZ_DEFAULT, pe: float = PECLET_DEFAULT
