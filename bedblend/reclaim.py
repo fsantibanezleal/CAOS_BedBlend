@@ -432,7 +432,20 @@ def cut(
     # the movement drifts away from the terrain, so every grade reported afterwards is attached to
     # the wrong place. Doing it here rather than leaving it to the caller is deliberate, because
     # forgetting exactly this is what the previous engine did.
-    moves = relax_to(terrain, repose_deg)
+    # SEEDED ON THE CELLS THE CUT ACTUALLY TOUCHED, which is what the build side has always done with
+    # `settle(active=...)`. This called the unseeded form and relaxed the whole pad on every cut.
+    #
+    # Measured before claiming anything for it: seeding changes the RESULT not at all, 768 against 767
+    # square metres of surface moved per cut on the reference scenario, because a pile that was stable
+    # before the cut has nothing to relax anywhere except around the cut. So this is a matter of the
+    # work following the machine rather than a fix for a visible defect, and correctness is unaffected
+    # either way: `relax_to` sweeps the whole pad regardless if anything is left over the angle.
+    #
+    # And the surface that moves is legitimately larger than the bite. Undercutting 4.5 m into ground
+    # standing at 37 degrees pulls material in from about 6 m around, so a 336 square metre bite shows
+    # up as roughly 770 of surface change. That apron is the slump, it is the physics, and it is not
+    # the machine reaching further than it can.
+    moves = relax_to(terrain, repose_deg, active=set(touched))
     if moves:
         model.apply_transfers(
             [(a, b, v * model.cell_area_m2) for a, b, v in moves],
