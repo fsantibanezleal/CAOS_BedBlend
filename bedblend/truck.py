@@ -70,9 +70,18 @@ class Payload:
 
 @dataclass
 class Route:
-    """A drivable polyline in pad metres, with the arc lengths needed to interpolate along it."""
+    """A drivable polyline in pad metres, with the arc lengths needed to interpolate along it.
+
+    ``points`` is SIMPLIFIED: collinear runs collapse to their endpoints, because a per-cell dump is
+    heavy to store and misleading to draw. ``cells`` is the unsimplified grid path the solver actually
+    found, kept because the per-step gradient rule is only meaningful between ADJACENT cells. A check
+    that applies ``step_ok`` to consecutive ``points`` divides a fifty metre segment's rise by one
+    cell width and overstates its gradient twentyfold; the reclaim route test did exactly that and
+    passed for releases because its long segments happened to be flat.
+    """
 
     points: list[tuple[float, float]] = field(default_factory=list)
+    cells: list[int] = field(default_factory=list)
 
     @property
     def length_m(self) -> float:
@@ -256,6 +265,7 @@ def solve_route(
     max_grade: float,
     simplify: bool = True,
     passable: list[bool] | None = None,
+    strict_goal: bool = False,
 ) -> Route:
     """A shortest drivable path from ``start`` to ``goal``, as A* over the trafficable cells.
 
@@ -263,9 +273,18 @@ def solve_route(
     count instead produces the staircase paths that make a route drawing look like a bug. The
     heuristic is straight-line distance, which is admissible on this cost, so the path is optimal.
 
-    THE GOAL CELL ITSELF IS EXEMPT from the gradient test. A truck spots at the crest, and the crest is
-    by definition steep on one side; requiring the discharge cell to be flat would make it impossible
-    to ever tip over an edge, which is the whole of the edge-dumping campaign.
+    THE GOAL CELL ITSELF IS EXEMPT from the gradient test by default. A truck spots at the crest, and
+    the crest is by definition steep on one side; requiring the discharge cell to be flat would make
+    it impossible to ever tip over an edge, which is the whole of the edge-dumping campaign.
+
+    ``strict_goal`` WITHDRAWS THAT EXEMPTION, and a caller routing a truck to somewhere it will simply
+    PARK has to withdraw it. Tipping over an edge and standing to be loaded are different manoeuvres,
+    and only the first justifies an unclimbable last step.
+
+    Measured honestly: on the current scenarios this changes no route, because the reclaim stand is
+    already chosen from the passability mask and the flood fill, so the ground around it is climbable
+    anyway. It is a correction of the SEMANTICS, not the repair of an observed defect, and it closes
+    the case where a stand's only short approach is over a lip.
     """
     s = terrain.cell_at(*start)
     g = terrain.cell_at(*goal)
@@ -294,12 +313,13 @@ def solve_route(
         seen.add(c)
         cx, cy = terrain.xy(c)
         for n in terrain.neighbours(c):
-            if n != g and not ok[n]:
+            exempt = n == g and not strict_goal
+            if not exempt and not ok[n]:
                 continue
             # The step has to be climbable, not just the ground standable. Same rule as the flood
             # fill, so "reachable" and "routable" cannot disagree and strand a load the mask
             # promised was servable.
-            if n != g and not step_ok(terrain, c, n, max_grade):
+            if not exempt and not step_ok(terrain, c, n, max_grade):
                 continue
             nx_, ny_ = terrain.xy(n)
             step = math.hypot(nx_ - cx, ny_ - cy)
@@ -320,7 +340,7 @@ def solve_route(
         chain.append(came[chain[-1]])
     chain.reverse()
     pts = [terrain.xy(c) for c in chain]
-    return Route(_simplify(pts) if simplify else pts)
+    return Route(_simplify(pts) if simplify else pts, cells=chain)
 
 
 def _simplify(points: list[tuple[float, float]], tol: float = 1e-6) -> list[tuple[float, float]]:

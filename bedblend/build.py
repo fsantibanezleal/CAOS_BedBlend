@@ -47,7 +47,7 @@ from .dump import (
     place_paddock,
     run_out_for_bench,
 )
-from .facesegregation import segregate_face
+from .facesegregation import segregate_face, segregation_index
 from .material import DEFAULT_MATERIAL, Material, SizeSplit
 from .relax import relax_to, settle
 from .terrain import Terrain
@@ -108,10 +108,19 @@ class LoadRecord:
     max_thickness_m: float = 0.0
     approach: Route | None = None
     departure: Route | None = None
-    # How strongly this load sorted itself on the way down the face, the drop it fell, and the coarse
+    # How strongly this load sorted itself on the way down the face, the drop it fell, and the mass
     # fraction that rolled beyond the toe. Zero for a paddock heap, which has no face to sort along.
+    #
+    # `segregation_index` IS THE MEASURED SORTING OF THIS LOAD, the difference in coarse fraction
+    # between the toe half of the face and the crest half, computed from the profile the Gray-Thornton
+    # march produced. It used to be `intensity`, the strength of the three published DRIVERS, which is
+    # an input to the physics and not a result of it: reporting a driver as though it were the answer
+    # is how a field ends up meaning something different from its name. `sr` is the segregation number
+    # the layer was solved at, so a reader can check the driver and the result separately.
     segregation_index: float = 0.0
+    sr: float = 0.0
     overrun_fraction: float = 0.0
+    overrun_coarse_fraction: float = 0.0
     drop_m: float = 0.0
     refused_reason: str = ""
 
@@ -468,8 +477,10 @@ def _run_one_load(
         coarse = [
             seg.coarse_fraction_at(split, min(int(sv * nb), nb - 1)) for sv in pl.s_frac
         ]
-        base.segregation_index = seg.intensity
+        base.segregation_index = segregation_index(seg, split)
+        base.sr = seg.sr
         base.overrun_fraction = seg.overrun_fraction
+        base.overrun_coarse_fraction = seg.overrun_coarse_fraction
         base.drop_m = max(drop, 0.0)
     else:
         coarse = [split.coarse] * len(pl.cells)
