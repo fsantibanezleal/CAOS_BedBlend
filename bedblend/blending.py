@@ -8,9 +8,9 @@ That is the definition in Loubser and de Korte, J. S. Afr. Inst. Min. Metall. 11
 doi:10.17159/2411-9717/2015/v115n8a15, following Kumral (2006), and their own results confirm the
 direction: cone shell 0.232, chevcon 0.121, with the text concluding that chevcon "has proven to
 deliver much better consistency". The reciprocal convention also circulates in secondary sources, and
-building against it would invert every number in the product and make the recommendation layer advise
-the worse stacking method. This is why ``vrr_formula_label`` exists and why the product renders the
-formula next to the number on every surface.
+building against it would invert every number in the product and make every comparison between
+stacking methods point the wrong way. This is why ``vrr_formula_label`` exists and why the product
+renders the formula next to the number on every surface.
 
 Both variances must be computed ON THE SAME BASE, that is, over equal tonnages rather than equal
 counts. Kumral states the requirement and it is easy to violate accidentally, because dumps and cuts
