@@ -87,3 +87,62 @@ def test_the_readme_names_the_anchored_constants_and_they_are_real(claim: str):
     assert claim in _text(), f"the README no longer discloses `{claim}`"
     mod = bedblend.facesegregation if claim == "PERCOLATION_COEFFICIENT" else bedblend.segregation
     assert hasattr(mod, claim), f"`{claim}` is disclosed in the README but not defined"
+
+
+# ---------------------------------------------------------------------------------------------
+# THE WIKI, held to the same rule as the README
+# ---------------------------------------------------------------------------------------------
+# The README was three engines out of date because nothing read it. A wiki is twenty-one times the
+# surface area of a README, so it is twenty-one times the opportunity for the same defect.
+
+DOCS = README.parent / "docs"
+
+
+def _wiki_pages() -> list[pathlib.Path]:
+    return sorted(DOCS.rglob("*.md"))
+
+
+def test_the_wiki_exists_and_is_indexed():
+    """A theme folder with no landing page, or a page nothing links to, is a page nobody reads."""
+    pages = _wiki_pages()
+    assert len(pages) >= 15, f"the wiki has shrunk to {len(pages)} pages"
+    for landing in ("README.md", "architecture.md", "methods.md", "guides.md", "data-contract.md"):
+        assert (DOCS / landing).exists(), f"docs/{landing} is missing"
+
+
+def test_every_internal_wiki_link_resolves():
+    """A dead link in a wiki is the cheapest possible lie and the easiest to prevent."""
+    broken = []
+    for p in _wiki_pages():
+        for _label, target in re.findall(r"\[([^\]]+)\]\(([^)]+)\)", p.read_text(encoding="utf-8")):
+            if target.startswith(("http://", "https://", "#", "mailto:")):
+                continue
+            rel = target.split("#")[0]
+            if rel and not (p.parent / rel).resolve().exists():
+                broken.append(f"{p.relative_to(DOCS.parent)} -> {target}")
+    assert not broken, "dead links in the wiki:\n  " + "\n  ".join(broken)
+
+
+def test_the_wiki_names_no_module_that_does_not_exist():
+    """The defect this whole repository spent a release removing, checked across the wiki."""
+    import pkgutil
+
+    on_disk = {m.name for m in pkgutil.iter_modules(bedblend.__path__)} | {"__init__"}
+    missing = set()
+    for p in _wiki_pages():
+        for mod in re.findall(r"`bedblend[/.](\w+)\.py", p.read_text(encoding="utf-8")):
+            if mod not in on_disk:
+                missing.add(f"{p.name}: bedblend/{mod}.py")
+    assert not missing, "the wiki names modules that do not exist:\n  " + "\n  ".join(sorted(missing))
+
+
+def test_the_wiki_keeps_house_style():
+    """No em-dash, no emoji. The consuming product fails CI on these and the engine should not differ."""
+    bad = []
+    for p in _wiki_pages():
+        t = p.read_text(encoding="utf-8")
+        if "\u2014" in t:
+            bad.append(f"{p.name}: em-dash")
+        if any(0x1F000 <= ord(c) <= 0x1FAFF or ord(c) == 0xFE0F for c in t):
+            bad.append(f"{p.name}: emoji")
+    assert not bad, "house style violations:\n  " + "\n  ".join(bad)
