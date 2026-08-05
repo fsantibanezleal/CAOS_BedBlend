@@ -1,0 +1,5 @@
+# The wiki ships in the source distribution. A reader who pulls the sdist to understand the
+# engine should not have to go back to GitHub for the documentation that explains it.
+recursive-include docs *.md
+include README.md CHANGELOG.md LICENSE CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md
+recursive-exclude tests *

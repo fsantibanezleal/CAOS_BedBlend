@@ -4,6 +4,37 @@ All notable changes to `bedblend` are recorded here. The format follows Keep a C
 top, and the versions follow `X.XX.XXX` (the manifest carries the semver form with the padding
 dropped).
 
+## [0.07.003] - 2026-08-05
+
+### Added
+
+- **The `docs/` wiki, which this repository did not have.** Twenty-one pages: three architecture
+  documents, ten methods, three guides, a data contract, and four index pages. Written to the house
+  documentation standard, which asks for theory, equations with every symbol defined, real DOIs, an
+  explicit statement of what each method IS and IS NOT, and the constants that are anchored rather
+  than measured.
+
+  **Every number in it was produced by running the code at this version, not copied from another
+  document**, and where a figure recorded in a source comment did not reproduce the page says so and
+  gives the value the code returns now. That is not a stylistic preference: this engine shipped a
+  solver nothing called and a README naming an API that had not existed for three releases, and both
+  survived because documentation was written from other documentation.
+
+  A fact-checking pass over every page found and fixed, among others: a dozer described as a build
+  phase the loop does not have (`_doze` is called from three sites and none is a campaign boundary),
+  an access ramp described as reserved when the plan deliberately emits tips across it, a build time
+  out by 25 percent, a claim that the suite runs with `verify_every` on when one test file passes it,
+  and a citation that gave Gray and Chugunov 2006 the title of Gray and Thornton 2005.
+
+- **`tests/test_readme.py` now gates the wiki too**: it must exist and be indexed, every internal
+  link must resolve (48 of them), no page may name a module that is not on disk, and house style is
+  enforced. The README checks it already carried are what caught the API that had not existed for
+  three releases.
+
+- **The wiki ships.** `MANIFEST.in` puts it in the source distribution, verified by building one and
+  listing the archive, and `pyproject.toml` gains a `Documentation` URL so the PyPI listing points at
+  it rather than only at the front page.
+
 ## [0.07.002] - 2026-08-05
 
 Documentation defects found by an adversarial audit of the release, all of the same kind the release
