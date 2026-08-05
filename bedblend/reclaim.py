@@ -123,10 +123,17 @@ class LoaderSpec:
     dig_radius_m: float = 15.0
     max_cut_height_m: float = 15.0
 
-    @property
-    def passes_for(self) -> float:
-        """Bucket passes per truck load, the ratio an operator actually quotes for a machine class."""
-        return self.payload_t / max(self.bucket_m3, 1e-9)
+    def passes_for(self, load_t: float, bulk_density_t_m3: float) -> float:
+        """Bucket passes to fill a load of ``load_t``, the ratio an operator quotes for a pairing.
+
+        A pass count is tonnes wanted over tonnes per bucket, and tonnes per bucket needs the
+        material's density: a bucket is a VOLUME. The previous version divided the machine's own
+        payload by its own bucket volume and returned 1.76, which is tonnes per cubic metre, a
+        density, not a count of anything. It read plausibly because a number near two is also a
+        plausible pass count, which is the kind of unit error a name hides rather than reveals.
+        """
+        per_bucket = self.bucket_m3 * max(bulk_density_t_m3, 1e-9)
+        return max(load_t, 0.0) / max(per_bucket, 1e-9)
 
 
 @dataclass

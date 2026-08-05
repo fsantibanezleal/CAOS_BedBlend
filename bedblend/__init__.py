@@ -31,6 +31,8 @@ THE MODULES, in the order material moves through them:
                   fresh heap stands at about 2:1 and slumps to repose afterwards
 * ``dozer``       levels the floor, pushes material over the face, raises berms, and reports how far
                   it displaced everything
+* ``material``    the density chain, moisture-dependent repose, and the two-species size split
+* ``topography``  the ground the pad is cut into, and the five fill types
 * ``blocks``      the raw ledger at truckload support, carrying grade uncertainty and displacement
 * ``sectors``     working-region rollups and the raw-versus-model comparison
 * ``reclaim``     sequenced extraction from a face, in LIFO, FIFO or full-height order
@@ -118,12 +120,14 @@ from .material import (
 )
 from .reclaim import (
     Cut,
+    HaulCycle,
     LoaderSpec,
     ReclaimFace,
     ReclaimMethod,
     advance,
     campaign,
     cut,
+    haul_cycle,
     next_cut,
 )
 from .relax import (
@@ -214,6 +218,7 @@ __all__ = [
     "FillType",
     "Fleet",
     "FlowingLayer",
+    "HaulCycle",
     "LoadRecord",
     "LoaderSpec",
     "Material",
@@ -257,6 +262,7 @@ __all__ = [
     "experimental_variogram",
     "fit_spherical",
     "ground",
+    "haul_cycle",
     "histogram",
     "homogeneity_map",
     "intensity",

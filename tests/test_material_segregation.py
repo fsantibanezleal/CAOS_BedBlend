@@ -127,7 +127,12 @@ def test_coarse_ends_up_at_the_toe_and_fines_near_the_crest():
     # Coarse mass leans toward the toe half; fine mass leans toward the crest half.
     n = seg.n_bins
     assert sum(seg.coarse_profile[n // 2:]) > sum(seg.coarse_profile[: n // 2])
-    assert sum(seg.fine_profile[: n // 2]) < sum(seg.fine_profile[n // 2:]) or True
+    # Fines lean toward the CREST half, which is the direction the sieving produces. This line
+    # used to read `... < ... or True`, so it asserted nothing at all, and the comparison it
+    # was hiding was written backwards: with `or True` removed it only passes the right way
+    # round. A dead assertion is worse than a missing one, because the count of tests says it
+    # is covered.
+    assert sum(seg.fine_profile[: n // 2]) > sum(seg.fine_profile[n // 2:])
     # And the fines are relatively MORE concentrated up-face than the coarse are.
     assert sum(seg.fine_profile[: n // 2]) > sum(seg.coarse_profile[: n // 2])
 

@@ -57,24 +57,33 @@ rate, ``q = kappa (U/H) d``. The segregation number is then
 and note that U has CANCELLED. How fast the layer runs does not change how much it sieves per metre
 of slope: a slower layer takes longer over the same path and sorts by the same amount.
 
-WHICH REGIME ACTUALLY BINDS, measured rather than assumed. For run-of-mine rock at a 120 mm d50 the
-flux-limited thickness ``Q/U`` is 0.09 to 0.35 m across every drop and angle the product runs, and the
-grain floor is 0.60 m, so the layer is GRAIN-LIMITED in every case and never flux-limited. H is
-therefore constant and
+WHICH REGIME BINDS, MEASURED ACROSS THE LOADS THAT ACTUALLY OCCUR. Both do, and an earlier version of
+this paragraph got that wrong by sampling only tall faces. With ``Q = 1 m2/s`` and a grain floor of
+0.60 m for a 120 mm d50, the crossover sits at a drop of about 1.02 m at 37 degrees: below it the
+layer is thin and fast enough that flux conservation binds, above it the grain floor does. Measured
+over the 16762 loads that formed a face in the shipped scenarios, whose drop has a median of 1.38 m,
+FORTY-TWO PERCENT are flux-limited and fifty-eight percent grain-limited. The product straddles the
+crossover; it does not sit on one side of it.
 
-    Sr = kappa d L / h_min^2,      L = drop / sin(t)
+The two regimes do not scale alike, and this is the part worth reading carefully:
 
-so kinetic sieving RISES with the drop height, which is the published direction, and FALLS GENTLY WITH
-THE FACE ANGLE because a steeper face is a SHORTER path from crest to toe.
+    flux-limited   H = Q/U      Sr = kappa d L U^2 / Q^2   rises steeply with drop AND with angle
+    grain-limited  H = h_min    Sr = kappa d L / h_min^2   rises with drop, FALLS with angle
 
-THAT LAST ONE CONTRADICTS A SOURCE, AND THE CONTRADICTION IS THE POINT. Steeper faces are reported to
-"create faster material flow down the face, increasing trajectory segregation", and the curve this
-module used to fit duly made its index rise with angle. But trajectory segregation is BALLISTIC, a
-different mechanism from kinetic sieving, and Gray and Thornton's equation does not contain it. Wiring
-the real solver separated the two mechanisms that the fitted curve had merged. So the model now says:
-on-face sieving weakens slightly with angle, while the material thrown clear of the toe, which is the
-trajectory term, grows with angle, and it is almost pure coarse. Both are reported, neither is hidden
-inside a single index, and a reader can check each against the source it came from.
+because in the grain-limited regime the thickness stops responding, so all that is left of the angle
+is the path length ``L = drop / sin(t)``, which a steeper face shortens.
+
+SO THE SOURCES AND THE SOLVER AGREE WHERE MOST OF THE MATERIAL IS, and part company on tall faces.
+Steeper faces are reported to "create faster material flow down the face, increasing trajectory
+segregation". Measured on this solver at 35, 37, 40 and 45 degrees: at a 0.5 m drop Sr runs 0.022,
+0.041, 0.062, 0.071, rising with angle exactly as reported; at 11 m it runs 1.928, 1.838, 1.721,
+1.564, falling. The reported direction is the flux-limited one, which is 42 percent of loads and the
+regime a truck tipping over a modest crest is in. A tall face reverses it because the layer has
+bottomed out on its own grains and only the shortened run remains.
+
+None of that is put there by hand. The fitted curve this module used to run made a single index rise
+with angle everywhere, which read as agreement with the source and was really a model with no way to
+disagree, and no way to be right for a different reason in a different regime either.
 
 It also predicts something the fitted curves could not: a face standing below the material's dynamic
 friction angle does not avalanche, so it does not sort, and the model now says so instead of
@@ -273,9 +282,11 @@ def segregate_face(
 ) -> FaceSegregation:
     """Distribute a cascading load's two species down the face.
 
-    Coarse mass is pushed toward the toe and fine mass toward the crest, in proportion to the
-    intensity. At zero intensity both come out uniform, which is the correct degenerate case: a load
-    tipped on flat ground, or one of a single size, does not sort itself.
+    Coarse mass ends up toward the toe and fine mass toward the crest. That is an OUTCOME of the
+    march below, not a rule applied here, and it is no longer proportional to ``intensity``: the
+    sorting is set by the segregation number the flowing layer is solved at. A face that does not
+    avalanche, one below the material's dynamic friction angle, comes out unsorted, and so does a
+    load of a single size, whose layer has nothing to separate.
 
     HOW IT IS SOLVED. A ``FlowingLayer`` is started at the crest holding the load's own fine fraction
     uniformly through its depth. It is marched down the face in ``n_bins`` steps of the

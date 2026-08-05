@@ -4,6 +4,51 @@ All notable changes to `bedblend` are recorded here. The format follows Keep a C
 top, and the versions follow `X.XX.XXX` (the manifest carries the semver form with the padding
 dropped).
 
+## [0.07.002] - 2026-08-05
+
+Documentation defects found by an adversarial audit of the release, all of the same kind the release
+itself was about: text describing code that is not there.
+
+### Fixed
+
+- **The README, which is the PyPI front page, described an engine that has not existed for three
+  releases.** Its example called `PadSpec`, `RunConfig`, `simulate` and `generate_stream`, none of
+  which are defined; its module table named `heightfield`, `pile` and `stacking`, none of which are on
+  disk; and it offered chevron, windrow, cone shell, chevcon and strata, the conveyor-stacker
+  geometries this package's own docstring calls a category error. Every other claim in the repo is
+  pinned by a test and the one document strangers actually read had no gate behind it. `test_readme.py`
+  now checks the module table against `pkgutil`, every `bb.` name in the example against the package,
+  the absence of the conveyor geometries, and that the two anchored constants it discloses exist. All
+  five checks fail against the old README.
+
+- **The "never flux-limited" regime claim was false, and it was measured on the wrong sample.** The
+  header derived `Sr` proportional to path length alone from the layer always being grain-limited,
+  which was checked only at tall faces. The crossover is at a drop of about 1.02 m, and across the
+  16762 loads that formed a face in the consuming product's scenarios, **42 percent are flux-limited**.
+  The two regimes do not scale alike, and the consequence is the interesting part: flux-limited, `Sr`
+  rises with face angle, which is the published direction; grain-limited it falls, because the layer
+  has bottomed out on its own grains and only the shortened run remains. The sources and the solver
+  agree where most of the material is and part company on tall faces.
+
+- **`segregate_face`'s first paragraph still described the withdrawn fitted-curve model**, saying the
+  sorting is proportional to `intensity` and that zero intensity gives a uniform face. Neither is true
+  of the solver.
+
+- **`LoaderSpec.passes_for` returned tonnes per cubic metre, not bucket passes.** It divided the
+  machine's payload by its own bucket volume, which is a density. A bucket is a VOLUME, so a pass count
+  needs the material's. It reads plausibly because a number near two is also a plausible pass count,
+  which is the kind of unit error a name hides.
+
+- **`HaulCycle` and `haul_cycle` were not exported**, so the half of 0.07.000 that carries the ore off
+  site could not be named from `import bedblend`.
+
+- **The module list in the package header was missing `material` and `topography`**, two of the
+  seventeen modules, one of whose types the package exports.
+
+- **A dead assertion in the segregation tests**: `assert ... or True` asserted nothing, and the
+  comparison it was hiding was written backwards. Fines lean toward the CREST half; with `or True`
+  removed it only passes the right way round.
+
 ## [0.07.001] - 2026-08-04
 
 ### Fixed
