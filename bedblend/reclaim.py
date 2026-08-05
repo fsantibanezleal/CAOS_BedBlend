@@ -571,6 +571,18 @@ def next_cut(
     parts: list[Cut] = []
     owed = tonnes_wanted
     rewound = False
+
+    # HOW FAR THE MACHINE WILL TRAM FOR ONE PARCEL. A loader filling a cut works a stretch of face,
+    # not the whole yard, and if that stretch cannot supply the tonnage then the parcel is SHORT. That
+    # is a real operational answer and the honest one: a pile 0.3 m thick cannot deliver 3000 tonnes,
+    # and a model that says otherwise is sweeping ground to hide it. Unbounded assembly did exactly
+    # that on the concurrent scenarios, where the reclaim runs while the pile is still being built:
+    # `surge` came out at 3303 square metres per cut removing 0.31 m, a skim across most of the pad.
+    #
+    # One sweep of the width, which is the stretch reachable without abandoning the face.
+    sweep = max(2, math.ceil(face.width_m / (2.0 * face.loader.dig_radius_m)))
+    trammed = 0
+
     for _ in range(MAX_STANCES_TRIED):
         if owed <= 1e-9:
             break
@@ -581,6 +593,13 @@ def next_cut(
             # Worked out at this stance if it could not fill the order from here.
             if owed <= 1e-9:
                 break
+        if parts:
+            # Only counted once the machine is actually loading. Getting TO the first productive
+            # stance is searching, not tramming, and a face whose near ground is worked out must
+            # still be allowed to find the material.
+            if trammed >= sweep:
+                break
+            trammed += 1
         if not face.step(terrain):
             # The face has run past the end of the material. On a CONCURRENT campaign that does not
             # mean the pile is finished, only that the reclaim is ahead of the trucks, so the face

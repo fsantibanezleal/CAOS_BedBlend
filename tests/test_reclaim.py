@@ -504,3 +504,48 @@ def test_an_empty_pad_still_terminates():
     t = Terrain.flat(48, 48, CELL)
     model = BlockModel.over(t)
     assert next_cut(t, model, _face(depth_m=10.0), 1500.0, repose_deg=REPOSE) is None
+
+
+def test_a_thin_pile_delivers_a_short_cut_instead_of_being_swept():
+    """The machine trams a stretch of face for one parcel, not the whole yard.
+
+    A pile that cannot supply the tonnage asked for delivers a SHORT cut, which is the real
+    operational answer. Assembling without a bound instead sweeps ground until the order is filled,
+    and that is how a concurrent scenario reclaiming a pile that is still being built came out at
+    3303 square metres per cut removing 0.31 m: a skim across most of the pad, dressed up as a full
+    parcel. The bound only binds when the ground is thin, so a pile that CAN supply the tonnage still
+    delivers all of it, which is asserted here too because a cap that always binds is just a smaller
+    cut.
+    """
+    thin = Terrain.flat(48, 48, CELL)
+    model = BlockModel.over(thin)
+    # A shallow, wide layer: plenty of tonnage in total, almost none within any one working stretch.
+    cells = [c for c in range(thin.n_cells)]
+    thick = [0.4] * len(cells)
+    for c, dz in zip(cells, thick):
+        thin.z[c] += dz
+    model.record(
+        thin, cells, thick, grade=0.5, source_block=0, event_id=0, lift=0, area="flat",
+    )
+    face = ReclaimFace(
+        method=ReclaimMethod.FULL_HEIGHT, position_m=0.0, direction=(1.0, 0.0),
+        depth_m=10.0, width_m=120.0, max_face_m=15.0,
+    )
+    want = 100_000.0
+    c = next_cut(thin, model, face, want, repose_deg=REPOSE)
+    assert c is not None and c.tonnes > 0
+    assert c.tonnes < want, "the cut filled an order the ground could not supply"
+    swept = len(c.cells) * (CELL ** 2)
+    sweep = max(2, math.ceil(face.width_m / (2.0 * face.loader.dig_radius_m)))
+    disc = math.pi * face.loader.dig_radius_m ** 2
+    assert swept <= (sweep + 1) * disc, (
+        f"one cut swept {swept:.0f} m2, more than the {sweep + 1} working stances it is allowed"
+    )
+
+    # And the bound must not bite when the ground is deep enough to fill the order from one stretch.
+    t, _a, m = _stocked()
+    full = next_cut(t, m, _face(depth_m=10.0), 1500.0, repose_deg=REPOSE)
+    assert full is not None
+    assert full.tonnes == pytest.approx(1500.0, rel=1e-6), (
+        "the tramming bound cut short an order the pile could fill"
+    )
