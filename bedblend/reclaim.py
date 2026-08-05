@@ -743,11 +743,21 @@ def haul_cycle(
     passable = passable_mask(terrain, max_grade)
     reach = reachable_mask(terrain, exit_xy, max_grade, passable=passable)
 
-    # The nearest cell to the loader that a truck can actually stand on AND get to.
+    # The nearest cell to the loader that a truck can actually stand on AND get to, EXCLUDING the
+    # ground the loader is working.
+    #
+    # TWO MACHINES CANNOT OCCUPY ONE CELL, and this module exists partly because the previous engine
+    # let them: the stacker and the reclaimer were measured inside the same cell in 5 of 51 cuts. The
+    # exclusion was not needed while a cut spread over the whole face, because the centroid of a
+    # 594 square metre skim was never a cell a truck would pick anyway. Once the bite became compact
+    # the centroid landed on freshly levelled, perfectly drivable ground, and the nearest stand to the
+    # loader became the loader's own cell: measured on `intensive_drain`, a separation of exactly
+    # zero. A smaller footprint is the right answer and this is what it uncovered underneath.
+    dug = set(cells)
     best: int | None = None
     best_d = float("inf")
     for c in range(terrain.n_cells):
-        if not (passable[c] and reach[c]):
+        if c in dug or not (passable[c] and reach[c]):
             continue
         x, y = terrain.xy(c)
         d = (x - loader[0]) ** 2 + (y - loader[1]) ** 2

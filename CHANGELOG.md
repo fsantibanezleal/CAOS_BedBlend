@@ -4,6 +4,21 @@ All notable changes to `bedblend` are recorded here. The format follows Keep a C
 top, and the versions follow `X.XX.XXX` (the manifest carries the semver form with the padding
 dropped).
 
+## [0.07.001] - 2026-08-04
+
+### Fixed
+
+- **The truck could park on the cell the loader was digging.** `haul_cycle` picked the nearest
+  passable, reachable cell to the loader without excluding the cut itself. The exclusion was not
+  needed while a cut spread over the whole face, because the centroid of a 594 square metre skim was
+  never a cell a truck would pick anyway; once 0.07.000 made the bite compact, the centroid landed on
+  freshly levelled and perfectly drivable ground and the nearest stand became the loader's own cell.
+  Measured on a consumer's `intensive_drain` artifact: a truck-to-loader separation of exactly zero.
+
+  Two machines occupying one cell is the defect this module was written to remove, the previous
+  engine having been measured doing it in 5 of 51 cuts. A smaller footprint uncovered it rather than
+  causing it, which is the useful part: the old geometry was hiding a collision behind a skim.
+
 ## [0.07.000] - 2026-08-04
 
 Two defects of the same kind, found the same way: the code that was documented and the code that ran

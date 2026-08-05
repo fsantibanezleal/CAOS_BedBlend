@@ -549,3 +549,33 @@ def test_a_thin_pile_delivers_a_short_cut_instead_of_being_swept():
     assert full.tonnes == pytest.approx(1500.0, rel=1e-6), (
         "the tramming bound cut short an order the pile could fill"
     )
+
+
+def test_the_truck_never_parks_on_the_ground_the_loader_is_digging():
+    """Two machines cannot occupy one cell, and this engine exists partly because they used to.
+
+    The stacker and the reclaimer were measured inside the same cell in 5 of 51 cuts in the previous
+    version. The exclusion was invisible while a cut spread over the whole face, because the centroid
+    of a 594 square metre skim was never a cell a truck would pick; once the bite became compact the
+    centroid landed on freshly levelled drivable ground and the nearest stand became the loader's own
+    cell, a separation of exactly zero. A better footprint uncovered it rather than causing it.
+    """
+    t, _area, model = _stocked()
+    face = _face(depth_m=10.0)
+    exit_xy = _exit_of(t)
+    served = 0
+    for _ in range(6):
+        c = next_cut(t, model, face, 1500.0, repose_deg=REPOSE)
+        if c is None:
+            break
+        haul_cycle(t, c.cells, exit_xy=exit_xy, max_grade=MAX_GRADE).apply_to(c)
+        if c.stand is None:
+            continue
+        served += 1
+        cell = t.cell_at(*c.stand)
+        assert cell not in set(c.cells), (
+            f"the truck parked on cell {cell}, which is one of the {len(c.cells)} the loader dug"
+        )
+        assert c.loader is not None
+        assert math.dist(c.stand, c.loader) > 0.0, "the truck and the loader are at the same point"
+    assert served > 0, "no cut was served, so the assertion proved nothing"
