@@ -1,7 +1,7 @@
 # Minimal-but-complete ignore for an instantiated product repo (ADR-0057).
 # This ships WITH the template so every product inherits it from day 1.
 
-# --- Python virtualenvs (ANY name, ANY depth) — NEVER committed; recreate via scripts/setup ---
+# --- Python virtualenvs (ANY name, ANY depth): NEVER committed; recreate via scripts/setup ---
 .venv/
 .venv*
 **/.venv*
@@ -28,12 +28,12 @@ frontend/public/manifests/
 frontend/public/pyodide/
 *.tsbuildinfo
 
-# --- Secrets / env (public repo — only .env.example is committed) ---
+# --- Secrets / env (public repo: only .env.example is committed) ---
 .env
 .env.*
 !.env.example
 
-# --- Raw / heavy data — commit ONLY the compact derived artifacts under data/derived/ ---
+# --- Raw / heavy data: commit ONLY the compact derived artifacts under data/derived/ ---
 data/raw/
 *.parquet
 *.h5

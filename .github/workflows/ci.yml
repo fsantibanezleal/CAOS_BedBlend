@@ -30,6 +30,8 @@ jobs:
         run: ruff check bedblend tests
       - name: Tests
         run: pytest
+      - name: No em-dash and no emoji in tracked content (ADR-0067)
+        run: python scripts/check_content_standards.py
       - name: The core really is dependency-free
         run: |
           python - <<'PY'
